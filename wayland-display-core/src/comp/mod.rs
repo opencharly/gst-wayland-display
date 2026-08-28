@@ -404,27 +404,36 @@ pub(crate) fn apply_video_info(
         .to_i32_round();
     for window in state.space.elements() {
         let toplevel = window.toplevel().unwrap();
-        let max_size = Rectangle::from_size(
-            with_states(toplevel.wl_surface(), |states| {
-                states
-                    .data_map
-                    .get::<XdgToplevelSurfaceData>()
-                    .map(|_attrs| {
-                        states
-                            .cached_state
-                            .get::<SurfaceCachedState>()
-                            .current()
-                            .max_size
-                    })
-            })
-            .unwrap_or(new_size),
-        );
+        let max_size = with_states(toplevel.wl_surface(), |states| {
+            states
+                .data_map
+                .get::<XdgToplevelSurfaceData>()
+                .map(|_attrs| {
+                    states
+                        .cached_state
+                        .get::<SurfaceCachedState>()
+                        .current()
+                        .max_size
+                })
+        })
+        .unwrap_or(new_size);
 
-        let new_size = max_size
-            .intersection(Rectangle::from_size(new_size))
-            .map(|rect| rect.size);
+        // An UNSET xdg max_size is (0, 0), and per xdg-shell that means "no limit" —
+        // not "zero-sized". Intersecting a (0,0) rectangle with the requested size
+        // yields None, so the toplevel is configured with size = None; a nested
+        // Aquamarine/Hyprland client then falls back to a hardcoded 1280x720 and the
+        // requested resolution is silently ignored. The INITIAL-configure path in
+        // wayland/handlers/compositor.rs already special-cases this exact sentinel
+        // (`if max_size.w == 0 && max_size.h == 0`); the RESIZE path must agree.
+        let configured_size = if max_size.w == 0 && max_size.h == 0 {
+            Some(new_size)
+        } else {
+            Rectangle::from_size(max_size)
+                .intersection(Rectangle::from_size(new_size))
+                .map(|rect| rect.size)
+        };
         toplevel.with_pending_state(|state| {
-            state.size = new_size;
+            state.size = configured_size;
             state.states.set(XdgState::Fullscreen);
             state.states.set(XdgState::Activated);
         });
@@ -637,6 +646,22 @@ pub(crate) fn init(
                         Some(vertical_amount),
                     );
                 }
+                Event::Msg(Command::PointerAxisSmooth(horizontal_amount, vertical_amount)) => {
+                    let time: Duration = state.clock.now().into();
+                    // AxisSource::Finger carries continuous surface-local pixel deltas
+                    // and NO v120 discrete steps - that pairing is what lets a client
+                    // tell kinetic/touchpad scrolling from notched wheel scrolling.
+                    // `pointer_axis` already emits the axis-stop events a Finger frame
+                    // needs when an amount is 0.0.
+                    state.pointer_axis(
+                        time.as_millis() as u32,
+                        AxisSource::Finger,
+                        horizontal_amount,
+                        vertical_amount,
+                        None,
+                        None,
+                    );
+                }
                 Event::Msg(Command::GetSupportedDmaFormats(sender)) => {
                     let formats = Bind::<Dmabuf>::supported_formats(&state.renderer);
                     let supported_formats = match &state.output_buffer {
@@ -682,6 +707,28 @@ pub(crate) fn init(
                     };
                     debug!("Supported dma formats: {:?}", supported_formats);
                     let _ = sender.send(supported_formats);
+                }
+                Event::Msg(Command::SetKeymap(keymap)) => {
+                    // Recompile the parent seat's keymap. A nested compositor derives
+                    // its modifier state from the events this seat sends, so this is
+                    // one half of a keymap change; the nested compositor's own
+                    // input config is the other half.
+                    if let Some(keyboard) = state.seat.get_keyboard() {
+                        let config = XkbConfig {
+                            rules: &keymap.rules,
+                            model: &keymap.model,
+                            layout: &keymap.layout,
+                            variant: &keymap.variant,
+                            options: keymap.options.clone(),
+                        };
+                        if let Err(err) = keyboard.set_xkb_config(state, config) {
+                            tracing::warn!(?err, ?keymap, "Failed to apply keymap");
+                        } else {
+                            tracing::info!(?keymap, "Applied keymap to seat keyboard");
+                        }
+                    } else {
+                        tracing::warn!("SetKeymap with no keyboard on the seat");
+                    }
                 }
                 Event::Msg(Command::GetRenderDevice(sender)) => {
                     let render_device: Option<GPUDevice> = match &state.render_node {

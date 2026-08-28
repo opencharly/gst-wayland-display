@@ -25,6 +25,18 @@ pub(crate) mod wayland;
 
 pub use crate::utils::video_info::GstVideoInfo;
 
+/// Owned counterpart of Smithay's borrowed [`XkbConfig`], so a keymap can be sent
+/// across the command channel. Empty fields mean "libxkbcommon default", matching
+/// `XkbConfig::default()`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeymapConfig {
+    pub rules: String,
+    pub model: String,
+    pub layout: String,
+    pub variant: String,
+    pub options: Option<String>,
+}
+
 pub enum Command {
     InputDevice(String),
     VideoInfo(GstVideoInfo),
@@ -39,7 +51,9 @@ pub enum Command {
     PointerMotionAbsolute(Point<f64, Logical>),
     PointerButton(u32, ButtonState),
     PointerAxis(f64, f64),
+    PointerAxisSmooth(f64, f64),
     GetSupportedDmaFormats(SyncSender<FormatSet>),
+    SetKeymap(KeymapConfig),
     GetRenderDevice(SyncSender<Option<GPUDevice>>),
     TouchDown(u32, Point<f64, Logical>),
     TouchUp(u32),
@@ -276,6 +290,13 @@ impl WaylandDisplay {
             .command_tx
             .send(Command::GetSupportedDmaFormats(buffer_tx));
         buffer_rx.recv().unwrap()
+    }
+
+    /// Recompile the seat keyboard's keymap. Applies to the parent compositor's own
+    /// `wl_seat`, which is what a nested client (e.g. Hyprland via Aquamarine's
+    /// Wayland backend) derives its modifier state from.
+    pub fn set_keymap(&self, keymap: KeymapConfig) {
+        let _ = self.command_tx.send(Command::SetKeymap(keymap));
     }
 
     pub fn get_render_device(&self) -> Option<GPUDevice> {

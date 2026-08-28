@@ -252,6 +252,16 @@ impl WaylandClient {
             .unwrap_or(0)
     }
 
+    /// Size carried by the most recent toplevel `configure` on the first window.
+    /// `(0, 0)` is xdg-shell's "client picks its own size" sentinel.
+    pub fn last_configure_size(&self) -> Option<(i32, i32)> {
+        self.state
+            .windows
+            .first()
+            .and_then(|w| w.configures_received.last())
+            .map(|(_, c)| c.size)
+    }
+
     /// Call this to start receiving Relative events in `get_client_events()`
     pub fn get_relative_pointer(&mut self) -> ZwpRelativePointerV1 {
         let qh = self.qh.clone();
