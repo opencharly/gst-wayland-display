@@ -133,6 +133,17 @@ impl EventHandler for WaylandDisplaySrc {
                     ));
 
                     return true;
+                } else if structure.has_name("MouseAxisSmooth") {
+                    // Continuous (touchpad/kinetic) scrolling. Unlike MouseAxis, the
+                    // values are surface-local pixel deltas, not 120-unit wheel steps,
+                    // and they map to AxisSource::Finger so clients can distinguish
+                    // smooth scrolling from a notched wheel.
+                    let x = structure.get::<f64>("x").expect("Should contain x");
+                    let y = structure.get::<f64>("y").expect("Should contain y");
+
+                    let _ = self.command_tx.send(Command::PointerAxisSmooth(x, y));
+
+                    return true;
                 } else if structure.has_name("MouseAxis") {
                     let x = structure.get::<f64>("x").expect("Should contain x");
                     let y = structure.get::<f64>("y").expect("Should contain y");

@@ -3,4 +3,5 @@ mod device;
 mod fixture;
 mod test_keymap;
 mod test_pointer;
+mod test_scroll;
 mod test_resolution;

@@ -646,6 +646,22 @@ pub(crate) fn init(
                         Some(vertical_amount),
                     );
                 }
+                Event::Msg(Command::PointerAxisSmooth(horizontal_amount, vertical_amount)) => {
+                    let time: Duration = state.clock.now().into();
+                    // AxisSource::Finger carries continuous surface-local pixel deltas
+                    // and NO v120 discrete steps - that pairing is what lets a client
+                    // tell kinetic/touchpad scrolling from notched wheel scrolling.
+                    // `pointer_axis` already emits the axis-stop events a Finger frame
+                    // needs when an amount is 0.0.
+                    state.pointer_axis(
+                        time.as_millis() as u32,
+                        AxisSource::Finger,
+                        horizontal_amount,
+                        vertical_amount,
+                        None,
+                        None,
+                    );
+                }
                 Event::Msg(Command::GetSupportedDmaFormats(sender)) => {
                     let formats = Bind::<Dmabuf>::supported_formats(&state.renderer);
                     let supported_formats = match &state.output_buffer {

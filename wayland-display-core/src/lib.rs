@@ -51,6 +51,7 @@ pub enum Command {
     PointerMotionAbsolute(Point<f64, Logical>),
     PointerButton(u32, ButtonState),
     PointerAxis(f64, f64),
+    PointerAxisSmooth(f64, f64),
     GetSupportedDmaFormats(SyncSender<FormatSet>),
     SetKeymap(KeymapConfig),
     GetRenderDevice(SyncSender<Option<GPUDevice>>),
