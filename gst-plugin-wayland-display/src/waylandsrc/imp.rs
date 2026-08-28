@@ -25,8 +25,8 @@ use waylanddisplaycore::utils::allocator::{
 #[cfg(feature = "cuda")]
 use waylanddisplaycore::utils::video_info::CUDAParams;
 use waylanddisplaycore::{
-    ButtonState, Channel, Command, DrmFormat, DrmModifier, GstVideoInfo, KeyState, Sender,
-    WaylandDisplay, channel, utils::device::PCIVendor,
+    ButtonState, Channel, Command, DrmFormat, DrmModifier, GstVideoInfo, KeyState, KeymapConfig,
+    Sender, WaylandDisplay, channel, utils::device::PCIVendor,
 };
 
 pub struct WaylandDisplaySrc {
@@ -52,6 +52,9 @@ impl Default for WaylandDisplaySrc {
 pub struct Settings {
     render_node: Option<String>,
     input_devices: Vec<String>,
+    xkb_layout: Option<String>,
+    xkb_variant: Option<String>,
+    xkb_options: Option<String>,
     disable_intel_workaround: bool,
     #[cfg(feature = "cuda")]
     cuda_context: Option<Arc<Mutex<cuda::CUDAContext>>>,
@@ -241,6 +244,34 @@ impl EventHandler for WaylandDisplaySrc {
     }
 }
 
+impl WaylandDisplaySrc {
+    /// Build a `KeymapConfig` from the xkb-* properties. Unset properties stay
+    /// empty, which libxkbcommon resolves to its own defaults.
+    fn keymap_config(&self) -> KeymapConfig {
+        let settings = self.settings.lock().unwrap();
+        KeymapConfig {
+            rules: String::new(),
+            model: String::new(),
+            layout: settings.xkb_layout.clone().unwrap_or_default(),
+            variant: settings.xkb_variant.clone().unwrap_or_default(),
+            options: settings.xkb_options.clone().filter(|o| !o.is_empty()),
+        }
+    }
+
+    /// Push the current xkb-* properties to a running compositor. A no-op before
+    /// `start()`, where `start()` applies them once the display exists.
+    fn apply_keymap(&self) {
+        let keymap = self.keymap_config();
+        if keymap == KeymapConfig::default() {
+            return;
+        }
+        let state = self.state.lock().unwrap();
+        if let Some(state) = state.as_ref() {
+            state.display.set_keymap(keymap);
+        }
+    }
+}
+
 impl ObjectImpl for WaylandDisplaySrc {
     fn properties() -> &'static [glib::ParamSpec] {
         static PROPERTIES: Lazy<Vec<glib::ParamSpec>> = Lazy::new(|| {
@@ -267,6 +298,28 @@ impl ObjectImpl for WaylandDisplaySrc {
                     .blurb("Input device to use (e.g. /dev/input/event0")
                     .construct()
                     .build(),
+                glib::ParamSpecString::builder("xkb-layout")
+                    .nick("XKB Layout")
+                    .blurb(
+                        "Comma-separated XKB layout(s) for the compositor's own seat keyboard \
+                         (e.g. \"us\" or \"us,de\"). Empty = libxkbcommon default. Settable while \
+                         running.",
+                    )
+                    .build(),
+                glib::ParamSpecString::builder("xkb-variant")
+                    .nick("XKB Variant")
+                    .blurb(
+                        "Comma-separated XKB variant(s), one per layout (e.g. \"nodeadkeys\"). \
+                         Empty = none. Settable while running.",
+                    )
+                    .build(),
+                glib::ParamSpecString::builder("xkb-options")
+                    .nick("XKB Options")
+                    .blurb(
+                        "Comma-separated XKB options (e.g. \"compose:ralt,caps:escape\"). \
+                         Empty = none. Settable while running.",
+                    )
+                    .build(),
                 glib::ParamSpecBoolean::builder("disable-intel-workaround")
                     .nick("Disable Intel workaround")
                     .blurb(
@@ -287,6 +340,20 @@ impl ObjectImpl for WaylandDisplaySrc {
                 settings.render_node = value
                     .get::<Option<String>>()
                     .expect("Type checked upstream");
+            }
+            "xkb-layout" | "xkb-variant" | "xkb-options" => {
+                {
+                    let mut settings = self.settings.lock().unwrap();
+                    let v = value.get::<Option<String>>().expect("Type checked upstream");
+                    match pspec.name() {
+                        "xkb-layout" => settings.xkb_layout = v,
+                        "xkb-variant" => settings.xkb_variant = v,
+                        _ => settings.xkb_options = v,
+                    }
+                }
+                // Apply immediately when the compositor is already running, so a keymap
+                // change does not require a pipeline restart.
+                self.apply_keymap();
             }
             #[cfg(feature = "cuda")]
             "cuda-device-id" => {
@@ -350,6 +417,18 @@ impl ObjectImpl for WaylandDisplaySrc {
                     .clone()
                     .unwrap_or_else(|| String::from("/dev/dri/renderD128"))
                     .to_value()
+            }
+            "xkb-layout" => {
+                let settings = self.settings.lock().unwrap();
+                settings.xkb_layout.clone().unwrap_or_default().to_value()
+            }
+            "xkb-variant" => {
+                let settings = self.settings.lock().unwrap();
+                settings.xkb_variant.clone().unwrap_or_default().to_value()
+            }
+            "xkb-options" => {
+                let settings = self.settings.lock().unwrap();
+                settings.xkb_options.clone().unwrap_or_default().to_value()
             }
             #[cfg(feature = "cuda")]
             "cuda-device-id" => {
@@ -845,6 +924,14 @@ impl BaseSrcImpl for WaylandDisplaySrc {
         }
 
         *state = Some(State { display });
+
+        // Apply the authored keymap now that the compositor exists. Property sets
+        // BEFORE start() are buffered in Settings; sets after it go through
+        // apply_keymap() directly.
+        drop(state);
+        self.apply_keymap();
+        let mut state = self.state.lock().unwrap();
+        let _ = &mut state;
 
         Ok(())
     }

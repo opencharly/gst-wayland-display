@@ -692,6 +692,28 @@ pub(crate) fn init(
                     debug!("Supported dma formats: {:?}", supported_formats);
                     let _ = sender.send(supported_formats);
                 }
+                Event::Msg(Command::SetKeymap(keymap)) => {
+                    // Recompile the parent seat's keymap. A nested compositor derives
+                    // its modifier state from the events this seat sends, so this is
+                    // one half of a keymap change; the nested compositor's own
+                    // input config is the other half.
+                    if let Some(keyboard) = state.seat.get_keyboard() {
+                        let config = XkbConfig {
+                            rules: &keymap.rules,
+                            model: &keymap.model,
+                            layout: &keymap.layout,
+                            variant: &keymap.variant,
+                            options: keymap.options.clone(),
+                        };
+                        if let Err(err) = keyboard.set_xkb_config(state, config) {
+                            tracing::warn!(?err, ?keymap, "Failed to apply keymap");
+                        } else {
+                            tracing::info!(?keymap, "Applied keymap to seat keyboard");
+                        }
+                    } else {
+                        tracing::warn!("SetKeymap with no keyboard on the seat");
+                    }
+                }
                 Event::Msg(Command::GetRenderDevice(sender)) => {
                     let render_device: Option<GPUDevice> = match &state.render_node {
                         Some(node) => {
