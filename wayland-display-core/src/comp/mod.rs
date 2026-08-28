@@ -404,27 +404,36 @@ pub(crate) fn apply_video_info(
         .to_i32_round();
     for window in state.space.elements() {
         let toplevel = window.toplevel().unwrap();
-        let max_size = Rectangle::from_size(
-            with_states(toplevel.wl_surface(), |states| {
-                states
-                    .data_map
-                    .get::<XdgToplevelSurfaceData>()
-                    .map(|_attrs| {
-                        states
-                            .cached_state
-                            .get::<SurfaceCachedState>()
-                            .current()
-                            .max_size
-                    })
-            })
-            .unwrap_or(new_size),
-        );
+        let max_size = with_states(toplevel.wl_surface(), |states| {
+            states
+                .data_map
+                .get::<XdgToplevelSurfaceData>()
+                .map(|_attrs| {
+                    states
+                        .cached_state
+                        .get::<SurfaceCachedState>()
+                        .current()
+                        .max_size
+                })
+        })
+        .unwrap_or(new_size);
 
-        let new_size = max_size
-            .intersection(Rectangle::from_size(new_size))
-            .map(|rect| rect.size);
+        // An UNSET xdg max_size is (0, 0), and per xdg-shell that means "no limit" —
+        // not "zero-sized". Intersecting a (0,0) rectangle with the requested size
+        // yields None, so the toplevel is configured with size = None; a nested
+        // Aquamarine/Hyprland client then falls back to a hardcoded 1280x720 and the
+        // requested resolution is silently ignored. The INITIAL-configure path in
+        // wayland/handlers/compositor.rs already special-cases this exact sentinel
+        // (`if max_size.w == 0 && max_size.h == 0`); the RESIZE path must agree.
+        let configured_size = if max_size.w == 0 && max_size.h == 0 {
+            Some(new_size)
+        } else {
+            Rectangle::from_size(max_size)
+                .intersection(Rectangle::from_size(new_size))
+                .map(|rect| rect.size)
+        };
         toplevel.with_pending_state(|state| {
-            state.size = new_size;
+            state.size = configured_size;
             state.states.set(XdgState::Fullscreen);
             state.states.set(XdgState::Activated);
         });

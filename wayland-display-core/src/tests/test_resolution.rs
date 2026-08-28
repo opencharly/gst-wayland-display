@@ -13,13 +13,14 @@
 //! Note on `wl_output.Mode` assertions vs `xdg_toplevel.Configure` size
 //! assertions: the compositor intersects each toplevel's declared `max_size`
 //! with the new output rect before calling `send_configure`. A client that has
-//! not explicitly set a `max_size` leaves it at the xdg-shell default `(0, 0)`
-//! (meaning "no limit"), which `Rectangle::from_size` treats as an empty rect,
-//! so the intersection is empty and the configure goes out with `size = None`
-//! (wire-encoded as `width=0, height=0`, xdg-shell's "client picks" value).
-//! These tests therefore assert on `wl_output.mode` dimensions and on the fact
-//! that a fresh configure was broadcast -- not on the configure's width/height,
-//! which is intentionally unconstrained for Wolf's client model.
+//! not explicitly set a `max_size` leaves it at the xdg-shell default `(0, 0)`,
+//! which per xdg-shell means "no limit". That sentinel is now handled
+//! explicitly (see `apply_video_info`), so the configure carries the requested
+//! size rather than `None` -- matching what the INITIAL-configure path in
+//! `wayland/handlers/compositor.rs` has always done. A nested compositor such
+//! as Aquamarine/Hyprland treats a `0x0` configure as 1280x720, so emitting
+//! `None` here silently ignored every resolution change; see
+//! `resize_configures_unbounded_toplevel_with_requested_size`.
 
 use crate::comp::apply_video_info;
 use crate::tests::fixture::Fixture;
@@ -239,4 +240,33 @@ fn apply_after_window_mapped_triggers_configure() {
     let mode = latest_mode_dimensions(f.client.get_output_events())
         .expect("expected wl_output.mode event");
     assert_eq!((mode.0, mode.1), (1280, 720));
+}
+
+#[test]
+fn resize_configures_unbounded_toplevel_with_requested_size() {
+    // Regression guard for the resize-path max_size sentinel.
+    //
+    // A client that never calls xdg_toplevel.set_max_size leaves max_size at the
+    // xdg-shell default (0, 0) = "no limit". Treating that as a real rectangle
+    // makes the intersection empty, so the toplevel is configured with
+    // size = None (wire 0x0). Aquamarine reads 0x0 as "use 1280x720", so every
+    // resolution change was silently dropped for a nested Hyprland.
+    let mut f = Fixture::new();
+    f.create_window(320, 240);
+
+    for &(w, h) in &[(1920, 1080), (1600, 900), (640, 480)] {
+        apply(&mut f, w, h, 60);
+
+        let size = f
+            .client
+            .last_configure_size()
+            .unwrap_or_else(|| panic!("no toplevel configure after apply {}x{}", w, h));
+        assert_eq!(
+            size,
+            (w as i32, h as i32),
+            "an unbounded toplevel must be configured with the requested size, got {:?} \
+             (0x0 means the max_size sentinel leaked back and Aquamarine will use 1280x720)",
+            size,
+        );
+    }
 }
