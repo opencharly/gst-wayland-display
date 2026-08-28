@@ -18,7 +18,8 @@ use wayland_client::protocol::wl_pointer;
 /// enter/motion traffic.
 fn focus(f: &mut Fixture) {
     f.create_window(320, 240);
-    f.server.pointer_motion_absolute(0, Point::from((10.0, 10.0)));
+    f.server
+        .pointer_motion_absolute(0, Point::from((10.0, 10.0)));
     f.round_trip();
     f.client.get_client_events().clear();
 }

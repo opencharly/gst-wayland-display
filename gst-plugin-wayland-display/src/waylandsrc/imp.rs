@@ -355,7 +355,9 @@ impl ObjectImpl for WaylandDisplaySrc {
             "xkb-layout" | "xkb-variant" | "xkb-options" => {
                 {
                     let mut settings = self.settings.lock().unwrap();
-                    let v = value.get::<Option<String>>().expect("Type checked upstream");
+                    let v = value
+                        .get::<Option<String>>()
+                        .expect("Type checked upstream");
                     match pspec.name() {
                         "xkb-layout" => settings.xkb_layout = v,
                         "xkb-variant" => settings.xkb_variant = v,
