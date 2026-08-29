@@ -62,7 +62,6 @@ use smithay::{
     },
 };
 use std::os::fd::OwnedFd;
-use std::sync::Mutex;
 use std::{
     collections::HashSet,
     ffi::CString,
