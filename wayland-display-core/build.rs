@@ -1,5 +1,3 @@
-
-
 fn main() {
     // Check if the cuda feature is enabled
     #[cfg(feature = "cuda")]
