@@ -1,9 +1,8 @@
 use crate::utils::{CAT, GstLayer};
 use gst::message::Application;
-use gst::query::Allocation;
 use gst::subclass::prelude::*;
-use gst::{Context, Event, Fraction, glib};
-use gst::{LibraryError, LoggableError};
+use gst::{Event, Fraction, glib};
+use gst::LibraryError;
 use gst::{Structure, prelude::*};
 use gst_base::prelude::BaseSrcExt;
 use gst_base::subclass::base_src::CreateSuccess;
@@ -12,8 +11,7 @@ use gst_video::{NavigationEvent, VideoCapsBuilder, VideoFormat, VideoInfo, Video
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::ops::DerefMut;
-use std::sync::atomic::AtomicPtr;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex};
 use tracing_subscriber::Registry;
 use tracing_subscriber::layer::SubscriberExt;
 #[cfg(feature = "cuda")]

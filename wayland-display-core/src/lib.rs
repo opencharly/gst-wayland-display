@@ -13,7 +13,6 @@ use smithay::utils::{Logical, Point};
 use std::ffi::{CString, c_char, c_void};
 use std::str::FromStr;
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use utils::RenderTarget;
 

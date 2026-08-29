@@ -11,7 +11,6 @@ use smithay::backend::allocator::dmabuf::{Dmabuf, DmabufAllocator};
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::{Allocator, Buffer, Fourcc};
 use smithay::backend::drm::DrmNode;
-use smithay::backend::egl::ffi::egl::types::EGLDisplay;
 use smithay::backend::renderer::gles::{GlesError, GlesRenderbuffer, GlesRenderer, GlesTarget};
 use smithay::backend::renderer::{Bind, ExportMem, Offscreen, Renderer};
 use smithay::reexports::drm::buffer::DrmFourcc;
@@ -20,7 +19,6 @@ use smithay::reexports::rustix::fs::{SeekFrom, seek};
 use smithay::utils::{DeviceFd, Rectangle};
 use std::fs::File;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
-use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone)]
 pub struct GsGlesbuffer {
@@ -212,7 +210,7 @@ pub enum VideoInfoTypes {
 }
 
 pub trait GsBuffer<R: Renderer> {
-    fn bind(&mut self, renderer: &mut R) -> Result<GlesTarget, R::Error>;
+    fn bind(&mut self, renderer: &mut R) -> Result<GlesTarget<'_>, R::Error>;
 
     fn to_gs_buffer(
         &self,
@@ -225,7 +223,7 @@ pub trait GsBuffer<R: Renderer> {
 }
 
 impl GsBuffer<GlesRenderer> for GsBufferType {
-    fn bind(&mut self, renderer: &mut GlesRenderer) -> Result<GlesTarget, GlesError> {
+    fn bind(&mut self, renderer: &mut GlesRenderer) -> Result<GlesTarget<'_>, GlesError> {
         match self {
             GsBufferType::RAW(buffer) => renderer.bind(&mut buffer.buffer),
             GsBufferType::DMA(buffer) => renderer.bind(&mut buffer.buffer),
