@@ -33,7 +33,7 @@ fn dump(f: &mut Fixture) -> String {
 fn axis_source_of(f: &mut Fixture) -> Option<wl_pointer::AxisSource> {
     f.client.get_client_events().iter().find_map(|e| match e {
         MouseEvents::Pointer(wl_pointer::Event::AxisSource { axis_source }) => {
-            axis_source.clone().into_result().ok()
+            (*axis_source).into_result().ok()
         }
         _ => None,
     })

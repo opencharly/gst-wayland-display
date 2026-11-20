@@ -10,17 +10,11 @@
 //! and failing here localises a regression to the compositor rather than to the
 //! wolf <-> gst-wayland-display glue.
 //!
-//! Note on `wl_output.Mode` assertions vs `xdg_toplevel.Configure` size
-//! assertions: the compositor intersects each toplevel's declared `max_size`
-//! with the new output rect before calling `send_configure`. A client that has
-//! not explicitly set a `max_size` leaves it at the xdg-shell default `(0, 0)`,
-//! which per xdg-shell means "no limit". That sentinel is now handled
-//! explicitly (see `apply_video_info`), so the configure carries the requested
-//! size rather than `None` -- matching what the INITIAL-configure path in
-//! `wayland/handlers/compositor.rs` has always done. A nested compositor such
-//! as Aquamarine/Hyprland treats a `0x0` configure as 1280x720, so emitting
-//! `None` here silently ignored every resolution change; see
-//! `resize_configures_unbounded_toplevel_with_requested_size`.
+//! Configure sizes: on a resolution change the compositor configures each mapped
+//! toplevel fullscreen at the new output size, clamped to the toplevel's `max_size`
+//! in each dimension it sets (xdg-shell's `0` means "no limit", and is the default).
+//! The `*_gets_output_size` tests below assert that size; the rest assert on
+//! `wl_output.mode` and on a fresh configure having been broadcast.
 
 use crate::comp::apply_video_info;
 use crate::tests::fixture::Fixture;
@@ -30,6 +24,7 @@ use gst::Fraction;
 use gst_video::{VideoFormat, VideoInfo};
 use test_log::test;
 use wayland_client::protocol::wl_output;
+use wayland_protocols::xdg::shell::client::xdg_toplevel;
 
 fn make_video_info(width: u32, height: u32, fps: i32) -> GstVideoInfo {
     GstVideoInfo::RAW(
@@ -88,10 +83,9 @@ fn apply_video_info_broadcasts_new_mode_to_client() {
         (1920, 1080),
         "client should observe the newly negotiated 1920x1080 mode",
     );
-    assert!(
-        mode.2 > 0,
-        "refresh rate should be non-zero, got {}",
-        mode.2
+    assert_eq!(
+        mode.2, 60_000,
+        "wl_output.mode refresh is in mHz: 60 fps must be 60000",
     );
 
     assert!(
@@ -154,10 +148,8 @@ fn framerate_only_change_updates_mode_refresh() {
     let after =
         latest_mode_dimensions(f.client.get_output_events()).expect("post-fps-change mode missing");
     assert_eq!((after.0, after.1), (1920, 1080));
-    assert_ne!(
-        after.2, baseline_refresh,
-        "refresh rate should change when fps changes",
-    );
+    assert_eq!(baseline_refresh, 60_000);
+    assert_eq!(after.2, 30_000, "refresh rate should follow the new fps");
 }
 
 #[test]
@@ -242,31 +234,65 @@ fn apply_after_window_mapped_triggers_configure() {
     assert_eq!((mode.0, mode.1), (1280, 720));
 }
 
+/// A toplevel that commits before the compositor has an output (a client launched before
+/// the first caps negotiation) must still get its initial configure once the output
+/// exists, instead of being dropped from the pending list and left waiting forever.
 #[test]
-fn resize_configures_unbounded_toplevel_with_requested_size() {
-    // Regression guard for the resize-path max_size sentinel.
-    //
-    // A client that never calls xdg_toplevel.set_max_size leaves max_size at the
-    // xdg-shell default (0, 0) = "no limit". Treating that as a real rectangle
-    // makes the intersection empty, so the toplevel is configured with
-    // size = None (wire 0x0). Aquamarine reads 0x0 as "use 1280x720", so every
-    // resolution change was silently dropped for a nested Hyprland.
+fn toplevel_committed_before_the_output_is_configured_by_it() {
+    let mut f = Fixture::without_output();
+    f.client.create_window();
+    f.round_trip();
+    assert_eq!(f.client.configure_count(), 0);
+
+    apply(&mut f, 320, 240, 60);
+    assert!(
+        f.client.configure_count() >= 1,
+        "toplevel committed before the output never got its initial configure"
+    );
+}
+
+fn assert_fullscreen_configure(f: &Fixture, size: (i32, i32)) {
+    let configure = f.client.last_configure().expect("no configure received");
+    assert_eq!(configure.size, size, "configure size");
+    assert!(configure.states.contains(&xdg_toplevel::State::Fullscreen));
+    assert!(configure.states.contains(&xdg_toplevel::State::Activated));
+}
+
+/// A mapped toplevel with no `max_size` must be resized to each new output size, not
+/// sent a fullscreen configure at 0x0 because its unset `max_size` clamped it to nothing.
+#[test]
+fn mapped_window_gets_output_size() {
     let mut f = Fixture::new();
     f.create_window(320, 240);
+    assert_eq!(f.server.space.elements().count(), 1);
 
-    for &(w, h) in &[(1920, 1080), (1600, 900), (640, 480)] {
-        apply(&mut f, w, h, 60);
+    apply(&mut f, 1280, 720, 60);
+    assert_fullscreen_configure(&f, (1280, 720));
 
-        let size = f
-            .client
-            .last_configure_size()
-            .unwrap_or_else(|| panic!("no toplevel configure after apply {}x{}", w, h));
-        assert_eq!(
-            size,
-            (w as i32, h as i32),
-            "an unbounded toplevel must be configured with the requested size, got {:?} \
-             (0x0 means the max_size sentinel leaked back and Aquamarine will use 1280x720)",
-            size,
-        );
-    }
+    let before = f.client.configure_count();
+    apply(&mut f, 1920, 1080, 60);
+    assert_eq!(f.client.configure_count(), before + 1);
+    assert_fullscreen_configure(&f, (1920, 1080));
+}
+
+/// Same for a toplevel that acked its initial configure and committed without a buffer,
+/// which maps it with nothing to show yet.
+#[test]
+fn acked_bufferless_window_gets_output_size() {
+    let mut f = Fixture::new();
+    f.client.create_window();
+    f.round_trip();
+    f.client.ack_window(0);
+    f.client.commit_window(0);
+    f.round_trip();
+    f.round_trip();
+    assert_eq!(f.server.space.elements().count(), 1);
+
+    apply(&mut f, 1280, 720, 60);
+    assert_fullscreen_configure(&f, (1280, 720));
+
+    let before = f.client.configure_count();
+    apply(&mut f, 1920, 1080, 60);
+    assert_eq!(f.client.configure_count(), before + 1);
+    assert_fullscreen_configure(&f, (1920, 1080));
 }
