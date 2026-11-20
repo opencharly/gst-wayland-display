@@ -300,3 +300,17 @@ coded size and the SPS are uninitialised at that point too, so no pool can be
 built. The encoders now answer the query without a pool when they have not
 started: the producer allocates its own buffers either way. Deterministic on a
 Radeon RX 9070 and a RTX 3070; a race on hardware where the first frame wins.
+
+## vkh264enc-vui-color.patch
+
+`vulkanh264enc` built no VUI colour description into the SPS, so a client that honours
+the VUI (Moonlight, a browser's H.264 decoder) had to guess and decoded the
+limited-range BT.601/709 NV12 as full range: a washed-out picture with a +16 black
+pedestal. The patched `vulkanh265enc` already writes the full VUI; this mirrors it for
+H.264. `_set_vui_colour_description()` fills `video_full_range_flag`,
+`colour_primaries`, `transfer_characteristics` and `matrix_coefficients` from the
+negotiated input colorimetry before the std SPS copy and `gst_h264_bit_writer_sps()`
+run; both already forward the fields, so only the fill was missing.
+
+It applies on top of `vulkan-encode-alloc-before-start.patch` (it continues that
+patch's `vkh264enc.c`), so it is last in `series`.
