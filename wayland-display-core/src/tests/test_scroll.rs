@@ -33,7 +33,7 @@ fn dump(f: &mut Fixture) -> String {
 fn axis_source_of(f: &mut Fixture) -> Option<wl_pointer::AxisSource> {
     f.client.get_client_events().iter().find_map(|e| match e {
         MouseEvents::Pointer(wl_pointer::Event::AxisSource { axis_source }) => {
-            axis_source.clone().into_result().ok()
+            (*axis_source).into_result().ok()
         }
         _ => None,
     })
@@ -86,9 +86,8 @@ fn smooth_scroll_is_reported_as_finger_without_discrete_steps() {
     let mut f = Fixture::new();
     focus(&mut f);
 
-    // What Command::PointerAxisSmooth drives: continuous pixel deltas, no v120.
-    f.server
-        .pointer_axis(0, AxisSource::Finger, 0.0, 12.5, None, None);
+    // The method Command::PointerAxisSmooth drives: continuous pixel deltas, no v120.
+    f.server.pointer_axis_smooth(0, 0.0, 12.5);
     f.round_trip();
 
     let events = dump(&mut f);
@@ -111,8 +110,7 @@ fn finger_scroll_emits_axis_stop_on_the_idle_axis() {
 
     // Vertical-only smooth scroll: the horizontal axis must be explicitly stopped,
     // which is how a client ends kinetic scrolling on that axis.
-    f.server
-        .pointer_axis(0, AxisSource::Finger, 0.0, 8.0, None, None);
+    f.server.pointer_axis_smooth(0, 0.0, 8.0);
     f.round_trip();
 
     let events = dump(&mut f);
