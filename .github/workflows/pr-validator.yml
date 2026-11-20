@@ -29,9 +29,12 @@ permissions:
 jobs:
   validate:
     name: validate
+    # Same-repository PRs only, as the org caller does it. NOT `head.repo.fork == false`:
+    # this repository IS a fork (of games-on-whales), so `fork` is true for every PR's
+    # head, including its own branches, and the job was skipped on all of them.
     if: >
       github.event_name == 'workflow_dispatch' ||
-      github.event.pull_request.head.repo.fork == false
+      github.event.pull_request.head.repo.full_name == github.repository
     uses: opencharly/.github/.github/workflows/pr-validator.yml@main
     with:
       pr-number: ${{ inputs.pr-number || github.event.pull_request.number }}
