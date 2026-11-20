@@ -1251,18 +1251,10 @@ pub(crate) fn init(
                 }
                 Event::Msg(Command::PointerAxisSmooth(horizontal_amount, vertical_amount)) => {
                     let time: Duration = state.clock.now().into();
-                    // AxisSource::Finger carries continuous surface-local pixel deltas
-                    // and NO v120 discrete steps - that pairing is what lets a client
-                    // tell kinetic/touchpad scrolling from notched wheel scrolling.
-                    // `pointer_axis` already emits the axis-stop events a Finger frame
-                    // needs when an amount is 0.0.
-                    state.pointer_axis(
+                    state.pointer_axis_smooth(
                         time.as_millis() as u32,
-                        AxisSource::Finger,
                         horizontal_amount,
                         vertical_amount,
-                        None,
-                        None,
                     );
                 }
                 Event::Msg(Command::GetSupportedDmaFormats(sender)) => {
@@ -1310,28 +1302,7 @@ pub(crate) fn init(
                     debug!("Supported dma formats: {:?}", supported_formats);
                     let _ = sender.send(supported_formats);
                 }
-                Event::Msg(Command::SetKeymap(keymap)) => {
-                    // Recompile the parent seat's keymap. A nested compositor derives
-                    // its modifier state from the events this seat sends, so this is
-                    // one half of a keymap change; the nested compositor's own
-                    // input config is the other half.
-                    if let Some(keyboard) = state.seat.get_keyboard() {
-                        let config = XkbConfig {
-                            rules: &keymap.rules,
-                            model: &keymap.model,
-                            layout: &keymap.layout,
-                            variant: &keymap.variant,
-                            options: keymap.options.clone(),
-                        };
-                        if let Err(err) = keyboard.set_xkb_config(state, config) {
-                            tracing::warn!(?err, ?keymap, "Failed to apply keymap");
-                        } else {
-                            tracing::info!(?keymap, "Applied keymap to seat keyboard");
-                        }
-                    } else {
-                        tracing::warn!("SetKeymap with no keyboard on the seat");
-                    }
-                }
+                Event::Msg(Command::SetKeymap(keymap)) => state.set_keymap(&keymap),
                 Event::Msg(Command::TouchDown(id, rel_position)) => {
                     let time: Duration = state.clock.now().into();
                     let logical_position = state

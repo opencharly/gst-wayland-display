@@ -13,7 +13,6 @@
 
 use crate::KeymapConfig;
 use crate::tests::fixture::Fixture;
-use smithay::input::keyboard::XkbConfig;
 use test_log::test;
 
 /// Name of the layout the seat keyboard is currently using.
@@ -26,18 +25,10 @@ fn active_layout_name(f: &mut Fixture) -> String {
     })
 }
 
+/// Drives the same `State::set_keymap` the `Command::SetKeymap` handler calls, so a
+/// regression in the shipped path fails these tests.
 fn set_keymap(f: &mut Fixture, keymap: KeymapConfig) {
-    let keyboard = f.server.seat.get_keyboard().expect("seat has a keyboard");
-    let config = XkbConfig {
-        rules: &keymap.rules,
-        model: &keymap.model,
-        layout: &keymap.layout,
-        variant: &keymap.variant,
-        options: keymap.options.clone(),
-    };
-    keyboard
-        .set_xkb_config(&mut f.server, config)
-        .expect("set_xkb_config should accept a valid keymap");
+    f.server.set_keymap(&keymap);
 }
 
 #[test]

@@ -1,8 +1,10 @@
 use super::{State, focus::FocusTarget};
+use crate::KeymapConfig;
 use smithay::backend::input::InputTime;
 use smithay::backend::input::Keycode;
 use smithay::backend::libinput::LibinputInputBackend;
 use smithay::input::keyboard::Keysym;
+use smithay::input::keyboard::XkbConfig;
 use smithay::input::tablet::tool::{
     AxisFrame as ToolAxisFrame, ButtonEvent as ToolButtonEvent, DownEvent as ToolDownEvent,
     MotionEvent as ToolMotionEvent, ProximityInEvent, ProximityOutEvent, TabletToolHandle,
@@ -526,6 +528,48 @@ impl State {
             },
         );
         pointer.frame(self);
+    }
+
+    /// Continuous (touchpad/kinetic) scrolling. `AxisSource::Finger` carries
+    /// surface-local pixel deltas and NO v120 discrete steps - that pairing is what
+    /// lets a client tell kinetic/touchpad scrolling from notched wheel scrolling.
+    /// `pointer_axis` emits the axis-stop events a Finger frame needs when an amount
+    /// is 0.0.
+    pub fn pointer_axis_smooth(
+        &mut self,
+        event_time_msec: u32,
+        horizontal_amount: f64,
+        vertical_amount: f64,
+    ) {
+        self.pointer_axis(
+            event_time_msec,
+            AxisSource::Finger,
+            horizontal_amount,
+            vertical_amount,
+            None,
+            None,
+        );
+    }
+
+    /// Recompile the parent seat's keymap. A nested compositor derives its modifier
+    /// state from the events this seat sends, so this is one half of a keymap
+    /// change; the nested compositor's own input config is the other half.
+    pub fn set_keymap(&mut self, keymap: &KeymapConfig) {
+        let Some(keyboard) = self.seat.get_keyboard() else {
+            tracing::warn!("SetKeymap with no keyboard on the seat");
+            return;
+        };
+        let config = XkbConfig {
+            rules: &keymap.rules,
+            model: &keymap.model,
+            layout: &keymap.layout,
+            variant: &keymap.variant,
+            options: keymap.options.clone(),
+        };
+        match keyboard.set_xkb_config(self, config) {
+            Ok(()) => tracing::info!(?keymap, "Applied keymap to seat keyboard"),
+            Err(err) => tracing::warn!(?err, ?keymap, "Failed to apply keymap"),
+        }
     }
 
     pub fn pointer_axis(
