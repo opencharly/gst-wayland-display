@@ -10,10 +10,21 @@ on:
         required: true
         type: string
 
+# Mirrors opencharly/.github's org-wide-pr-validator-required.yml. This fork is
+# outside the org ruleset (default branch `stable`), so it carries its own caller,
+# and the caller must grant everything the reusable workflow's jobs ask for: a
+# called workflow can never hold more than its caller, so a missing grant is a
+# `startup_failure` with no job and no `validate / validate` check at all.
+concurrency:
+  group: pr-validator-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pr-number }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
   pull-requests: write
   actions: write
+  issues: write
+  checks: read
 
 jobs:
   validate:
