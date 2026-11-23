@@ -84,6 +84,21 @@ fn move_mouse() {
         assert_eq!(surface_x, expected_location.x);
         assert_eq!(surface_y, expected_location.y);
 
+        // follows_every_enter_with_a_motion: the enter is followed by a plain motion at
+        // the same position. wl_pointer.enter carries the position, but a client may move
+        // its pointer on motion events only -- KWin's nested Wayland backend does exactly
+        // that (src/backends/wayland/wayland_backend.cpp: its Pointer::entered handler
+        // only attaches the cursor), so without the motion the first move after any
+        // focus change was lost.
+        let next = client_events
+            .iter()
+            .find(|e| !matches!(e, MouseEvents::Pointer(wl_pointer::Event::Frame)));
+        assert!(
+            matches!(next, Some(MouseEvents::Pointer(wl_pointer::Event::Motion { surface_x: x, surface_y: y, .. })) if *x == expected_location.x && *y == expected_location.y),
+            "the enter must be followed by a motion at the same position, got: {:?}",
+            client_events
+        );
+
         clean_events(client_events);
     }
 
@@ -485,5 +500,39 @@ fn active_constraint_suppresses_the_forced_leave() {
             .any(|e| matches!(e, MouseEvents::Pointer(wl_pointer::Event::Leave { .. }))),
         "the guard must clear the trigger, not retry it, got: {:?}",
         client_events
+    );
+}
+
+/// A lock that activates on the enter must not be followed by the extra motion that
+/// `follows_every_enter_with_a_motion` adds: zwp_locked_pointer_v1 forbids wl_pointer.motion
+/// while the pointer is locked. The case is the one the map handler names: a client (nested
+/// gamescope with --force-grab-cursor) requests the lock BEFORE its toplevel maps, so the
+/// map's synthetic motion both enters the surface and activates the lock.
+#[test]
+fn no_motion_follows_an_enter_that_activates_a_lock() {
+    let mut f = Fixture::new();
+    f.round_trip();
+    f.client.create_window();
+    f.round_trip();
+    let _lock = f.client.lock_pointer();
+    f.round_trip();
+    clean_events(f.client.get_client_events());
+
+    f.client.setup_window(320, 240);
+    f.round_trip();
+    f.round_trip();
+
+    let events = f.client.get_client_events();
+    let entered = events
+        .iter()
+        .any(|e| matches!(e, MouseEvents::Pointer(wl_pointer::Event::Enter { .. })));
+    assert!(entered, "the map must enter the surface, got: {events:?}");
+    let motions: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, MouseEvents::Pointer(wl_pointer::Event::Motion { .. })))
+        .collect();
+    assert!(
+        motions.is_empty(),
+        "no wl_pointer.motion may reach a locked pointer, got: {events:?}"
     );
 }

@@ -31,6 +31,20 @@ impl XdgShellHandler for State {
         let other = |w: &Window| w.toplevel().map(|t| t != &surface).unwrap_or(true);
         self.pending_windows.retain(other);
         self.windows_awaiting_output.retain(other);
+
+        // A MAPPED toplevel going away must hand the seat back to what is left: without
+        // this, keyboard and pointer focus stayed on the dead window, and the remaining
+        // toplevel (a nested desktop, say) received no input at all until another window
+        // happened to map.
+        let mapped = self
+            .space
+            .elements()
+            .find(|w| w.toplevel().map(|t| t == &surface).unwrap_or(false))
+            .cloned();
+        if let Some(window) = mapped {
+            self.space.unmap_elem(&window);
+            self.focus_after_unmap(&FocusTarget::from(window));
+        }
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {

@@ -93,6 +93,8 @@ struct State {
     keyboard: Option<wl_keyboard::WlKeyboard>,
     windows: Vec<Window>,
     pub mouse_events: Vec<MouseEvents>,
+    /// Every wl_keyboard event, so tests can assert which surface holds keyboard focus.
+    pub keyboard_events: Vec<wl_keyboard::Event>,
     pub output: Option<wl_output::WlOutput>,
     pub output_events: Vec<wl_output::Event>,
 }
@@ -299,6 +301,7 @@ impl WaylandClient {
             keyboard: None,
             windows: Vec::new(),
             mouse_events: Vec::new(),
+            keyboard_events: Vec::new(),
             output: None,
             output_events: Vec::new(),
         };
@@ -462,6 +465,11 @@ impl WaylandClient {
 
     pub fn get_client_events(&mut self) -> &mut Vec<MouseEvents> {
         self.state.mouse_events.as_mut()
+    }
+
+    /// All wl_keyboard events received so far; callers `drain` or inspect.
+    pub fn get_keyboard_events(&mut self) -> &mut Vec<wl_keyboard::Event> {
+        self.state.keyboard_events.as_mut()
     }
 
     /// All `wl_output` events received so far (geometry, mode, scale, done, name,
@@ -808,7 +816,7 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
 
 impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
     fn event(
-        _state: &mut Self,
+        state: &mut Self,
         _: &wl_keyboard::WlKeyboard,
         event: wl_keyboard::Event,
         _: &(),
@@ -816,6 +824,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
         _: &QueueHandle<Self>,
     ) {
         tracing::debug!("{:?}", event);
+        state.keyboard_events.push(event);
     }
 }
 
