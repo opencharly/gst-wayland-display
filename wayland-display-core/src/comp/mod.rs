@@ -1249,14 +1249,6 @@ pub(crate) fn init(
                         Some(vertical_amount),
                     );
                 }
-                Event::Msg(Command::PointerAxisSmooth(horizontal_amount, vertical_amount)) => {
-                    let time: Duration = state.clock.now().into();
-                    state.pointer_axis_smooth(
-                        time.as_millis() as u32,
-                        horizontal_amount,
-                        vertical_amount,
-                    );
-                }
                 Event::Msg(Command::GetSupportedDmaFormats(sender)) => {
                     let formats = Bind::<Dmabuf>::supported_formats(&state.renderer);
                     let supported_formats = match &state.output_buffer {
@@ -1302,7 +1294,6 @@ pub(crate) fn init(
                     debug!("Supported dma formats: {:?}", supported_formats);
                     let _ = sender.send(supported_formats);
                 }
-                Event::Msg(Command::SetKeymap(keymap)) => state.set_keymap(&keymap),
                 Event::Msg(Command::TouchDown(id, rel_position)) => {
                     let time: Duration = state.clock.now().into();
                     let logical_position = state

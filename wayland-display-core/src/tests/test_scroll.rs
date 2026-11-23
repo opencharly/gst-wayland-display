@@ -1,11 +1,13 @@
-//! Tests for the two scroll sources: notched wheel (`MouseAxis` ->
-//! `AxisSource::Wheel`) and continuous/touchpad (`MouseAxisSmooth` ->
-//! `AxisSource::Finger`).
+//! Test for the ONE scroll source this element has after the fork features go:
+//! the notched wheel (`GstNavigation` `MouseScroll` -> `MouseAxis` -> the seat's
+//! `AxisSource::Wheel`).
 //!
-//! Clients tell the two apart by the `wl_pointer.axis_source` a frame carries,
-//! and by whether it is accompanied by `axis_value120` discrete steps. Asserting
-//! on the wire events is the only way to prove a smooth-scroll event does not
-//! reach the client as a wheel notch.
+//! Clients tell sources apart by the `wl_pointer.axis_source` a frame carries and by
+//! whether it is accompanied by `axis_value120` discrete steps. Asserting on the wire
+//! events is the only in-repo proof that a wheel notch reaches a client as a WHEEL —
+//! which is the downstream the `MouseScroll` arm in `waylandsrc/imp.rs` feeds. (The
+//! fork's continuous `MouseAxisSmooth` source, and its own two cases, are deleted in
+//! the same cutover that removed the command; only this case survives it.)
 
 use crate::tests::client::MouseEvents;
 use crate::tests::fixture::Fixture;
@@ -48,18 +50,6 @@ fn has_value120(f: &mut Fixture) -> bool {
     })
 }
 
-fn has_horizontal_axis_stop(f: &mut Fixture) -> bool {
-    f.client.get_client_events().iter().any(|e| {
-        matches!(
-            e,
-            MouseEvents::Pointer(wl_pointer::Event::AxisStop {
-                axis: wayland_client::WEnum::Value(wl_pointer::Axis::HorizontalScroll),
-                ..
-            })
-        )
-    })
-}
-
 #[test]
 fn wheel_scroll_is_reported_as_wheel_with_discrete_steps() {
     let mut f = Fixture::new();
@@ -78,45 +68,5 @@ fn wheel_scroll_is_reported_as_wheel_with_discrete_steps() {
     assert!(
         has_value120(&mut f),
         "a wheel frame must carry axis_value120 discrete steps, got {events}",
-    );
-}
-
-#[test]
-fn smooth_scroll_is_reported_as_finger_without_discrete_steps() {
-    let mut f = Fixture::new();
-    focus(&mut f);
-
-    // The method Command::PointerAxisSmooth drives: continuous pixel deltas, no v120.
-    f.server.pointer_axis_smooth(0, 0.0, 12.5);
-    f.round_trip();
-
-    let events = dump(&mut f);
-    assert_eq!(
-        axis_source_of(&mut f),
-        Some(wl_pointer::AxisSource::Finger),
-        "MouseAxisSmooth must reach the client as axis_source=finger, got {events}",
-    );
-    assert!(
-        !has_value120(&mut f),
-        "a finger frame must NOT carry axis_value120 - that is what makes it \
-         distinguishable from a wheel notch. Got {events}",
-    );
-}
-
-#[test]
-fn finger_scroll_emits_axis_stop_on_the_idle_axis() {
-    let mut f = Fixture::new();
-    focus(&mut f);
-
-    // Vertical-only smooth scroll: the horizontal axis must be explicitly stopped,
-    // which is how a client ends kinetic scrolling on that axis.
-    f.server.pointer_axis_smooth(0, 0.0, 8.0);
-    f.round_trip();
-
-    let events = dump(&mut f);
-    assert!(
-        has_horizontal_axis_stop(&mut f),
-        "a finger frame with no horizontal motion must emit axis_stop for the \
-         horizontal axis, got {events}",
     );
 }

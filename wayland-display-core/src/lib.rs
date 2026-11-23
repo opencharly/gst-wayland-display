@@ -30,18 +30,6 @@ pub(crate) mod wayland;
 
 pub use crate::utils::video_info::GstVideoInfo;
 
-/// Owned counterpart of Smithay's borrowed [`XkbConfig`], so a keymap can be sent
-/// across the command channel. Empty fields mean "libxkbcommon default", matching
-/// `XkbConfig::default()`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct KeymapConfig {
-    pub rules: String,
-    pub model: String,
-    pub layout: String,
-    pub variant: String,
-    pub options: Option<String>,
-}
-
 pub enum Command {
     InputDevice(String),
     VideoInfo(Box<GstVideoInfo>),
@@ -56,9 +44,7 @@ pub enum Command {
     PointerMotionAbsolute(Point<f64, Logical>),
     PointerButton(u32, ButtonState),
     PointerAxis(f64, f64),
-    PointerAxisSmooth(f64, f64),
     GetSupportedDmaFormats(SyncSender<FormatSet>),
-    SetKeymap(KeymapConfig),
     TouchDown(u32, Point<f64, Logical>),
     TouchUp(u32),
     TouchMotion(u32, Point<f64, Logical>),
@@ -395,12 +381,6 @@ impl WaylandDisplay {
 
     pub fn get_render_device(&self) -> Option<GPUDevice> {
         self.render_device.clone()
-    }
-
-    /// Recompile the seat keyboard's keymap. Applies to the parent compositor's own
-    /// `wl_seat`, which is what a nested client derives its modifier state from.
-    pub fn set_keymap(&self, keymap: KeymapConfig) {
-        let _ = self.command_tx.send(Command::SetKeymap(keymap));
     }
 
     /// Drain any pending compositor -> element HDR-state notifications, returning the most

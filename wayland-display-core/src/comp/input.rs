@@ -1,10 +1,8 @@
 use super::{State, focus::FocusTarget};
-use crate::KeymapConfig;
 use smithay::backend::input::InputTime;
 use smithay::backend::input::Keycode;
 use smithay::backend::libinput::LibinputInputBackend;
 use smithay::input::keyboard::Keysym;
-use smithay::input::keyboard::XkbConfig;
 use smithay::input::tablet::tool::{
     AxisFrame as ToolAxisFrame, ButtonEvent as ToolButtonEvent, DownEvent as ToolDownEvent,
     MotionEvent as ToolMotionEvent, ProximityInEvent, ProximityOutEvent, TabletToolHandle,
@@ -32,7 +30,7 @@ use smithay::{
         input::LibinputInterface,
         rustix::fs::{Mode, OFlags, open},
     },
-    utils::{Logical, Point, SERIAL_COUNTER, Serial},
+    utils::{IsAlive, Logical, Point, SERIAL_COUNTER, Serial},
     wayland::pointer_constraints::{PointerConstraint, with_pointer_constraint},
 };
 use std::collections::{HashMap, HashSet};
@@ -419,6 +417,7 @@ impl State {
         // Allocated AFTER the refocus block: the re-emitted wl_pointer.enter below must carry
         // a serial NEWER than the forced leave's, since clients echo enter serials back.
         let serial = SERIAL_COUNTER.next_serial();
+        let focus_before = pointer.current_focus();
 
         let possible_pos = self.clamp_coords(self.pointer_location + delta);
 
@@ -437,6 +436,41 @@ impl State {
                     time: InputTime::from_millis(event_time_msec),
                 },
             );
+
+            // Follow every enter with a plain motion at the same position. wl_pointer.enter
+            // carries the position, but a client may take its pointer position from motion
+            // events only: KWin's nested Wayland backend does exactly that
+            // (src/backends/wayland/wayland_backend.cpp, whose Pointer::entered handler only
+            // attaches the cursor). Without this motion the first move after any focus
+            // change -- a map, a refocus, a window closing -- never moved KWin's pointer.
+            // Same focus, same position: protocol-legal and a no-op for clients that
+            // already took the position from the enter -- EXCEPT under an active pointer
+            // lock: zwp_locked_pointer_v1 forbids wl_pointer.motion while locked, and an
+            // enter is exactly when a lock requested before the map (nested gamescope with
+            // --force-grab-cursor) activates. Checked AFTER the enter, since that is when
+            // the lock became active.
+            let focus_after = pointer.current_focus();
+            let locked = focus_after
+                .as_ref()
+                .and_then(|focus| focus.wl_surface())
+                .map(|surface| {
+                    with_pointer_constraint(&surface, &pointer, |constraint| {
+                        matches!(constraint.as_deref(), Some(PointerConstraint::Locked(_)))
+                            && constraint.is_some_and(|c| c.is_active())
+                    })
+                })
+                .unwrap_or(false);
+            if focus_after.is_some() && focus_after != focus_before && !locked {
+                pointer.motion(
+                    self,
+                    under.clone(),
+                    &MotionEvent {
+                        location: self.pointer_location,
+                        serial: SERIAL_COUNTER.next_serial(),
+                        time: InputTime::from_millis(event_time_msec),
+                    },
+                );
+            }
         }
 
         // Relative motion is always applied
@@ -451,6 +485,35 @@ impl State {
         );
 
         pointer.frame(self);
+    }
+
+    /// Hands the seat back after a mapped toplevel (`gone`) left the space: keyboard focus
+    /// moves to the topmost remaining window when it was on `gone` (or on nothing, or on
+    /// something no longer alive), and pointer focus is re-resolved at the pointer's
+    /// current location the same way a map does -- a synthetic zero-delta motion -- so the
+    /// window now under the pointer gets its enter (and the motion that follows it).
+    pub(crate) fn focus_after_unmap(&mut self, gone: &FocusTarget) {
+        let serial = SERIAL_COUNTER.next_serial();
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            let lost = keyboard
+                .current_focus()
+                .map(|focus| &focus == gone || !focus.alive())
+                .unwrap_or(true);
+            if lost && !keyboard.is_grabbed() {
+                let top = self.space.elements().last().cloned();
+                if let Some(window) = &top {
+                    self.space.raise_element(window, true);
+                }
+                keyboard.set_focus(self, top.map(FocusTarget::from), serial);
+            }
+        }
+        let time: std::time::Duration = self.clock.now().into();
+        self.pointer_motion(
+            time.as_millis() as u32,
+            time.as_micros() as u64,
+            (0., 0.).into(),
+            (0., 0.).into(),
+        );
     }
 
     pub fn set_pointer_location(&mut self, location: Point<f64, Logical>) {
@@ -528,48 +591,6 @@ impl State {
             },
         );
         pointer.frame(self);
-    }
-
-    /// Continuous (touchpad/kinetic) scrolling. `AxisSource::Finger` carries
-    /// surface-local pixel deltas and NO v120 discrete steps - that pairing is what
-    /// lets a client tell kinetic/touchpad scrolling from notched wheel scrolling.
-    /// `pointer_axis` emits the axis-stop events a Finger frame needs when an amount
-    /// is 0.0.
-    pub fn pointer_axis_smooth(
-        &mut self,
-        event_time_msec: u32,
-        horizontal_amount: f64,
-        vertical_amount: f64,
-    ) {
-        self.pointer_axis(
-            event_time_msec,
-            AxisSource::Finger,
-            horizontal_amount,
-            vertical_amount,
-            None,
-            None,
-        );
-    }
-
-    /// Recompile the parent seat's keymap. A nested compositor derives its modifier
-    /// state from the events this seat sends, so this is one half of a keymap
-    /// change; the nested compositor's own input config is the other half.
-    pub fn set_keymap(&mut self, keymap: &KeymapConfig) {
-        let Some(keyboard) = self.seat.get_keyboard() else {
-            tracing::warn!("SetKeymap with no keyboard on the seat");
-            return;
-        };
-        let config = XkbConfig {
-            rules: &keymap.rules,
-            model: &keymap.model,
-            layout: &keymap.layout,
-            variant: &keymap.variant,
-            options: keymap.options.clone(),
-        };
-        match keyboard.set_xkb_config(self, config) {
-            Ok(()) => tracing::info!(?keymap, "Applied keymap to seat keyboard"),
-            Err(err) => tracing::warn!(?err, ?keymap, "Failed to apply keymap"),
-        }
     }
 
     pub fn pointer_axis(

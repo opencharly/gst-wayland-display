@@ -33,8 +33,8 @@ use waylanddisplaycore::utils::allocator::{
 use waylanddisplaycore::utils::video_info::CUDAParams;
 use waylanddisplaycore::utils::video_info::{EncodeTarget, VulkanCodec};
 use waylanddisplaycore::{
-    ButtonState, Channel, Command, DrmFormat, DrmModifier, GstVideoInfo, KeyState, KeymapConfig,
-    PendingFrame, Sender, WaylandDisplay, channel, utils::device::PCIVendor,
+    ButtonState, Channel, Command, DrmFormat, DrmModifier, GstVideoInfo, KeyState, PendingFrame,
+    Sender, WaylandDisplay, channel, utils::device::PCIVendor,
 };
 
 pub struct WaylandDisplaySrc {
@@ -198,9 +198,6 @@ fn sysfs_root() -> PathBuf {
 pub struct Settings {
     render_node: Option<String>,
     input_devices: Vec<String>,
-    xkb_layout: Option<String>,
-    xkb_variant: Option<String>,
-    xkb_options: Option<String>,
     // Devices announced with VirtualDevicesReady; re-added on every start() while unchanged.
     virtual_input_devices: Vec<VirtualDevice>,
     disable_intel_workaround: bool,
@@ -370,17 +367,6 @@ impl EventHandler for WaylandDisplaySrc {
                     ));
 
                     return true;
-                } else if structure.has_name("MouseAxisSmooth") {
-                    // Continuous (touchpad/kinetic) scrolling. Unlike MouseAxis, the
-                    // values are surface-local pixel deltas, not 120-unit wheel steps,
-                    // and they map to AxisSource::Finger so clients can distinguish
-                    // smooth scrolling from a notched wheel.
-                    let x = structure.get::<f64>("x").expect("Should contain x");
-                    let y = structure.get::<f64>("y").expect("Should contain y");
-
-                    self.send_command(Command::PointerAxisSmooth(x, y));
-
-                    return true;
                 } else if structure.has_name("MouseAxis") {
                     let x = structure.get::<f64>("x").expect("Should contain x");
                     let y = structure.get::<f64>("y").expect("Should contain y");
@@ -473,6 +459,13 @@ impl EventHandler for WaylandDisplaySrc {
 
                         return true;
                     }
+                    NavigationEvent::MouseScroll {
+                        delta_x, delta_y, ..
+                    } => {
+                        self.send_command(gst_scroll_to_axis(delta_x, delta_y));
+
+                        return true;
+                    }
                     _ => {
                         tracing::warn!("Unhandled event: {:?}", navigation_event);
                     }
@@ -484,32 +477,16 @@ impl EventHandler for WaylandDisplaySrc {
     }
 }
 
-impl WaylandDisplaySrc {
-    /// Build a `KeymapConfig` from the xkb-* properties. Unset properties stay
-    /// empty, which libxkbcommon resolves to its own defaults.
-    fn keymap_config(&self) -> KeymapConfig {
-        let settings = self.settings.lock().unwrap();
-        KeymapConfig {
-            rules: String::new(),
-            model: String::new(),
-            layout: settings.xkb_layout.clone().unwrap_or_default(),
-            variant: settings.xkb_variant.clone().unwrap_or_default(),
-            options: settings.xkb_options.clone().filter(|o| !o.is_empty()),
-        }
-    }
-
-    /// Push the current xkb-* properties to a running compositor. A no-op before
-    /// `start()`, where `start()` applies them once the display exists.
-    fn apply_keymap(&self) {
-        let keymap = self.keymap_config();
-        if keymap == KeymapConfig::default() {
-            return;
-        }
-        let state = self.state.lock().unwrap();
-        if let Some(state) = state.as_ref() {
-            state.display.set_keymap(keymap);
-        }
-    }
+/// Maps a GstNavigation `MouseScroll` onto the seat's wheel axis.
+///
+/// GStreamer's sinks report a positive `delta_y` (and `delta_x`) as scrolling up (left):
+/// the Wayland GL window negates both Wayland axes, and Win32's `WM_MOUSEWHEEL` is positive
+/// away from the user. GStreamer fixes no unit, so this element takes Win32's: 120 per wheel
+/// notch, the same v120 unit `Command::PointerAxis` carries. Wayland's axis is positive
+/// down (right), hence the sign flip. A fractional notch (a high-resolution wheel or a
+/// touchpad) stays fractional.
+fn gst_scroll_to_axis(delta_x: f64, delta_y: f64) -> Command {
+    Command::PointerAxis(-delta_x, -delta_y)
 }
 
 impl ObjectImpl for WaylandDisplaySrc {
@@ -537,28 +514,6 @@ impl ObjectImpl for WaylandDisplaySrc {
                     .nick("Input Device")
                     .blurb("Input device to use (e.g. /dev/input/event0")
                     .construct()
-                    .build(),
-                glib::ParamSpecString::builder("xkb-layout")
-                    .nick("XKB Layout")
-                    .blurb(
-                        "Comma-separated XKB layout(s) for the compositor's own seat keyboard \
-                         (e.g. \"us\" or \"us,de\"). Empty = libxkbcommon default. Settable while \
-                         running.",
-                    )
-                    .build(),
-                glib::ParamSpecString::builder("xkb-variant")
-                    .nick("XKB Variant")
-                    .blurb(
-                        "Comma-separated XKB variant(s), one per layout (e.g. \"nodeadkeys\"). \
-                         Empty = none. Settable while running.",
-                    )
-                    .build(),
-                glib::ParamSpecString::builder("xkb-options")
-                    .nick("XKB Options")
-                    .blurb(
-                        "Comma-separated XKB options (e.g. \"compose:ralt,caps:escape\"). \
-                         Empty = none. Settable while running.",
-                    )
                     .build(),
                 glib::ParamSpecBoolean::builder("disable-intel-workaround")
                     .nick("Disable Intel workaround")
@@ -769,22 +724,6 @@ impl ObjectImpl for WaylandDisplaySrc {
                 }
                 settings.render_node = render_node;
             }
-            "xkb-layout" | "xkb-variant" | "xkb-options" => {
-                {
-                    let mut settings = self.settings.lock().unwrap();
-                    let v = value
-                        .get::<Option<String>>()
-                        .expect("Type checked upstream");
-                    match pspec.name() {
-                        "xkb-layout" => settings.xkb_layout = v,
-                        "xkb-variant" => settings.xkb_variant = v,
-                        _ => settings.xkb_options = v,
-                    }
-                }
-                // Apply immediately when the compositor is already running, so a keymap
-                // change does not require a pipeline restart.
-                self.apply_keymap();
-            }
             #[cfg(feature = "cuda")]
             "cuda-device-id" => {
                 let mut cuda_context = {
@@ -908,18 +847,6 @@ impl ObjectImpl for WaylandDisplaySrc {
                     .clone()
                     .unwrap_or_else(|| String::from("/dev/dri/renderD128"))
                     .to_value()
-            }
-            "xkb-layout" => {
-                let settings = self.settings.lock().unwrap();
-                settings.xkb_layout.clone().unwrap_or_default().to_value()
-            }
-            "xkb-variant" => {
-                let settings = self.settings.lock().unwrap();
-                settings.xkb_variant.clone().unwrap_or_default().to_value()
-            }
-            "xkb-options" => {
-                let settings = self.settings.lock().unwrap();
-                settings.xkb_options.clone().unwrap_or_default().to_value()
             }
             #[cfg(feature = "cuda")]
             "cuda-device-id" => {
@@ -1958,14 +1885,6 @@ impl BaseSrcImpl for WaylandDisplaySrc {
 
         *state = Some(State { display });
 
-        // Apply the authored keymap now that the compositor exists. Property sets
-        // BEFORE start() are buffered in Settings; sets after it go through
-        // apply_keymap() directly.
-        drop(state);
-        self.apply_keymap();
-        let mut state = self.state.lock().unwrap();
-        let _ = &mut state;
-
         Ok(())
     }
 
@@ -2624,6 +2543,32 @@ fn gst_key_to_scancode(key: &str) -> Option<u32> {
         m
     });
     KEYMAP.get(key).copied()
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::gst_scroll_to_axis;
+    use waylanddisplaycore::Command;
+
+    fn axis(dx: f64, dy: f64) -> (f64, f64) {
+        match gst_scroll_to_axis(dx, dy) {
+            Command::PointerAxis(h, v) => (h, v),
+            _ => panic!("MouseScroll must map to Command::PointerAxis"),
+        }
+    }
+
+    #[test]
+    fn one_notch_down_is_one_wayland_wheel_step_down() {
+        // GStreamer: negative delta_y = down; Wayland: positive = down, 120 per notch.
+        assert_eq!(axis(0.0, -120.0), (0.0, 120.0));
+    }
+
+    #[test]
+    fn up_left_and_fractions_keep_their_sign_and_size() {
+        assert_eq!(axis(0.0, 120.0), (0.0, -120.0));
+        assert_eq!(axis(60.0, 0.0), (-60.0, 0.0));
+        assert_eq!(axis(-30.0, 15.0), (30.0, -15.0));
+    }
 }
 
 #[cfg(test)]
