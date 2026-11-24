@@ -421,9 +421,21 @@ impl EventHandler for WaylandDisplaySrc {
                 // navigation message, and the failure looks, from outside, exactly like input
                 // that never arrived (the panic text goes to stderr, which the streamer's
                 // captured stdout does not hold). Dropped with a warning, like an unknown key.
-                let Some(navigation_event) =
-                    navigation_event_or_drop(gst_video::NavigationEvent::parse(n))
-                else {
+                // THE BUS, not only tracing. `tracing` writes to stderr, and this element's
+                // service captures stdout only (opencharly/spec#432), so a dropped navigation
+                // event was INVISIBLE from a bed — it presented exactly like input that never
+                // arrived, which is how the pointer hunt in opencharly/charly-streamer#23 lost
+                // whole sessions to a drop nobody could see. Posting it on the bus puts the
+                // failure where the streamer and the bed can read it.
+                let parsed = gst_video::NavigationEvent::parse(n);
+                if let Err(err) = &parsed {
+                    gst::element_warning!(
+                        self.obj(),
+                        gst::CoreError::Failed,
+                        ("Unparseable navigation event dropped: {err}")
+                    );
+                }
+                let Some(navigation_event) = navigation_event_or_drop(parsed) else {
                     return false;
                 };
 
