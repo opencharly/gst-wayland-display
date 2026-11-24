@@ -443,6 +443,23 @@ impl State {
         let serial = SERIAL_COUNTER.next_serial();
         let focus_before = pointer.current_focus();
 
+        // DIAGNOSTIC (branch diag/seat-pointer-log, never merged): the one measurement
+        // opencharly/charly-streamer#23 still needs. Every motion reports where it is going,
+        // whether a surface is under the DESTINATION, whether a surface is under the current
+        // location, the focus before the dispatch and whether a wl_pointer resource exists.
+        tracing::warn!(
+            target: "gwd_pointer_diag",
+            from_x = self.pointer_location.x,
+            from_y = self.pointer_location.y,
+            to_x = possible_pos.x,
+            to_y = possible_pos.y,
+            under_target = under_at_target.is_some(),
+            under_current = under.is_some(),
+            focus_before = focus_before.is_some(),
+            refocus_pending = self.pending_pointer_refocus,
+            "pointer motion"
+        );
+
         // Pointer should only move if it's not locked or confined (and going out of bounds)
         if self.can_pointer_move(&under, possible_pos) {
             self.set_pointer_location(possible_pos);

@@ -429,6 +429,14 @@ impl EventHandler for WaylandDisplaySrc {
 
                 match navigation_event {
                     NavigationEvent::MouseMove { x, y, .. } => {
+                        // DIAGNOSTIC (branch diag/seat-pointer-log, never merged): proves the
+                        // navigation event reached the ELEMENT at all, and with which coordinates.
+                        tracing::warn!(
+                            target: "gwd_pointer_diag",
+                            x = x,
+                            y = y,
+                            "navigation MouseMove received"
+                        );
                         self.send_command(Command::PointerMotionAbsolute((x, y).into()));
 
                         return true;
