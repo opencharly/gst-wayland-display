@@ -264,6 +264,24 @@ impl CompositorHandler for State {
                 // Refresh the bbox from the buffer committed just now -- the same fix
                 // tests/fixture.rs applies manually for the pointer tests to work.
                 window.on_commit();
+                // wl_surface.enter: tell the client which OUTPUT its surface is on.
+                //
+                // Nothing in this compositor sent it. A Wayland client learns its output from
+                // `wl_surface.enter` -- fractional scale, the output's mode, and, for a nested
+                // compositor (KWin as a client of this one), the surface<->output association it
+                // needs before it will process pointer input at all. Measured: a pointer motion
+                // that this compositor dispatched with a real focus target (`under_target=true`)
+                // reached no client of the nested KWin, while KEYBOARD events from the same seat
+                // did (opencharly/pod-kde-nested#3, opencharly/gst-wayland-display#20).
+                if let Some(output) = self.output.as_ref() {
+                    for surface in window
+                        .toplevel()
+                        .map(|t| t.wl_surface().clone())
+                        .into_iter()
+                    {
+                        output.enter(&surface);
+                    }
+                }
                 self.seat.get_keyboard().unwrap().set_focus(
                     self,
                     Some(FocusTarget::from(window)),
