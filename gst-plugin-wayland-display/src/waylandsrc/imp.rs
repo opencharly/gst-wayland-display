@@ -421,12 +421,10 @@ impl EventHandler for WaylandDisplaySrc {
                 // navigation message, and the failure looks, from outside, exactly like input
                 // that never arrived (the panic text goes to stderr, which the streamer's
                 // captured stdout does not hold). Dropped with a warning, like an unknown key.
-                let navigation_event = match gst_video::NavigationEvent::parse(n) {
-                    Ok(ev) => ev,
-                    Err(err) => {
-                        tracing::warn!("Unparseable navigation event ({err}); dropping it");
-                        return false;
-                    }
+                let Some(navigation_event) =
+                    navigation_event_or_drop(gst_video::NavigationEvent::parse(n))
+                else {
+                    return false;
                 };
 
                 match navigation_event {
@@ -486,6 +484,28 @@ impl EventHandler for WaylandDisplaySrc {
             _ => (),
         }
         false
+    }
+}
+
+/// The navigation arm's OWN decision, extracted so a test can drive its error path
+/// (opencharly/gst-wayland-display#15).
+///
+/// `gst_video::NavigationEvent::parse` returns `Result`, and this runs on the streaming
+/// thread: an `unwrap` here ABORTS the pipeline instead of dropping a malformed message, so
+/// any peer could take the session down with one bad navigation event — and the abort is
+/// invisible from outside (the panic goes to stderr while the streamer's captured output is
+/// stdout), which presents exactly like input that never arrived. A malformed event is
+/// dropped with a warning that names the error, the same rule this element already applies
+/// to an unknown key.
+fn navigation_event_or_drop(
+    parsed: Result<gst_video::NavigationEvent, gst::glib::error::BoolError>,
+) -> Option<gst_video::NavigationEvent> {
+    match parsed {
+        Ok(ev) => Some(ev),
+        Err(err) => {
+            tracing::warn!("Unparseable navigation event ({err}); dropping it");
+            None
+        }
     }
 }
 
@@ -2555,6 +2575,22 @@ fn gst_key_to_scancode(key: &str) -> Option<u32> {
         m
     });
     KEYMAP.get(key).copied()
+}
+
+#[cfg(test)]
+mod navigation_error_tests {
+    use super::navigation_event_or_drop;
+
+    /// A malformed navigation event is DROPPED, never a panic. Without this the arm would
+    /// abort the streaming thread on any bad message from a peer (opencharly/gst-wayland-display#15).
+    #[test]
+    fn an_unparseable_navigation_event_is_dropped_not_panicked() {
+        let parsed = Err(gst::glib::bool_error!("malformed navigation event"));
+        assert!(
+            navigation_event_or_drop(parsed).is_none(),
+            "the Err arm must drop the event and return, never unwrap"
+        );
+    }
 }
 
 #[cfg(test)]
