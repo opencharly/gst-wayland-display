@@ -429,11 +429,8 @@ impl EventHandler for WaylandDisplaySrc {
                 // failure where the streamer and the bed can read it.
                 let parsed = gst_video::NavigationEvent::parse(n);
                 if let Err(err) = &parsed {
-                    gst::element_warning!(
-                        self.obj(),
-                        gst::CoreError::Failed,
-                        ("Unparseable navigation event dropped: {err}")
-                    );
+                    let element: gst::Element = self.obj().clone().upcast();
+                    report_dropped_navigation(&element, err);
                 }
                 let Some(navigation_event) = navigation_event_or_drop(parsed) else {
                     return false;
@@ -519,6 +516,23 @@ fn navigation_event_or_drop(
             None
         }
     }
+}
+
+/// Reports a navigation event this element had to drop, ON THE BUS.
+///
+/// `tracing` writes to stderr and this element's service captures stdout only
+/// (opencharly/spec#432), so a `tracing`-only warning is invisible from a bed — it presents
+/// exactly like input that never arrived. The bus is the channel a field observer can read.
+///
+/// The message is a FORMAT TUPLE, not an interpolated literal: the element-message macros take
+/// `("fmt {}", arg)`, and a bare `("… {}", )`-less string would emit the braces literally and lose
+/// the error text that is the entire point of the report. `a_dropped_navigation_event_is_/// reported_on_the_bus` asserts the emitted text, so a regression there fails a test.
+fn report_dropped_navigation(element: &gst::Element, err: &gst::glib::error::BoolError) {
+    gst::element_warning!(
+        element,
+        gst::CoreError::Failed,
+        ("Unparseable navigation event dropped: {}", err)
+    );
 }
 
 /// Maps a GstNavigation `MouseScroll` onto the seat's wheel axis.
@@ -2591,6 +2605,47 @@ fn gst_key_to_scancode(key: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod navigation_error_tests {
+    use super::report_dropped_navigation;
+    use gst::prelude::*;
+    /// R7 for the bus report: the emitted warning must actually carry the error text. Fails if
+    /// `report_dropped_navigation` is removed (no message reaches the bus at all) and fails if the
+    /// format tuple regresses to an interpolated literal (the braces would be emitted verbatim).
+    #[test]
+    fn a_dropped_navigation_event_is_reported_on_the_bus() {
+        let _ = gst::init();
+        let element = gst::ElementFactory::make("identity")
+            .build()
+            .expect("identity element");
+        let bin = gst::Bin::default();
+        bin.add(&element).expect("add identity to bin");
+        let bus = gst::Bus::new();
+        bin.set_bus(Some(&bus));
+
+        report_dropped_navigation(
+            &element,
+            &gst::glib::bool_error!("malformed navigation event"),
+        );
+
+        let msg = bus
+            .timed_pop_filtered(
+                gst::ClockTime::from_mseconds(500),
+                &[gst::MessageType::Warning],
+            )
+            .expect("a warning message must reach the bus");
+        let gst::MessageView::Warning(warning) = msg.view() else {
+            panic!("expected a Warning message");
+        };
+        let text = warning.error().to_string();
+        assert!(
+            text.contains("Unparseable navigation event dropped"),
+            "the warning must name the drop, got: {text}"
+        );
+        assert!(
+            text.contains("malformed navigation event"),
+            "the warning must carry the ERROR TEXT, not literal braces, got: {text}"
+        );
+    }
+
     use super::navigation_event_or_drop;
 
     /// A malformed navigation event is DROPPED, never a panic. Without this the arm would
