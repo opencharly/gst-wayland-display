@@ -415,7 +415,19 @@ impl EventHandler for WaylandDisplaySrc {
                 }
             }
             gst::EventView::Navigation(n) => {
-                let navigation_event = gst_video::NavigationEvent::parse(n).unwrap();
+                // NEVER PANIC ON A NAVIGATION EVENT. `parse` returns Result, and this runs on
+                // the streaming thread: an unwrap here ABORTS the pipeline instead of dropping
+                // a malformed message — so any client can take the session down with one bad
+                // navigation message, and the failure looks, from outside, exactly like input
+                // that never arrived (the panic text goes to stderr, which the streamer's
+                // captured stdout does not hold). Dropped with a warning, like an unknown key.
+                let navigation_event = match gst_video::NavigationEvent::parse(n) {
+                    Ok(ev) => ev,
+                    Err(err) => {
+                        tracing::warn!("Unparseable navigation event ({err}); dropping it");
+                        return false;
+                    }
+                };
 
                 match navigation_event {
                     NavigationEvent::MouseMove { x, y, .. } => {
