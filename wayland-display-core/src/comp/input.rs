@@ -443,22 +443,30 @@ impl State {
         let serial = SERIAL_COUNTER.next_serial();
         let focus_before = pointer.current_focus();
 
-        // DIAGNOSTIC (branch diag/seat-pointer-log, never merged): the one measurement
-        // opencharly/charly-streamer#23 still needs. Every motion reports where it is going,
-        // whether a surface is under the DESTINATION, whether a surface is under the current
-        // location, the focus before the dispatch and whether a wl_pointer resource exists.
-        tracing::warn!(
-            target: "gwd_pointer_diag",
-            from_x = self.pointer_location.x,
-            from_y = self.pointer_location.y,
-            to_x = possible_pos.x,
-            to_y = possible_pos.y,
-            under_target = under_at_target.is_some(),
-            under_current = under.is_some(),
-            focus_before = focus_before.is_some(),
-            refocus_pending = self.pending_pointer_refocus,
-            "pointer motion"
-        );
+        // DIAGNOSTIC (branch diag/seat-pointer-log, never merged). Written to a FILE, not to
+        // tracing: the streamer's service captures stdout only (a service cannot declare a
+        // stderr log -- opencharly/spec#432), so a tracing line would not be readable from the bed.
+        {
+            use std::io::Write as _;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/gwd-pointer-diag.log")
+            {
+                let _ = writeln!(
+                    f,
+                    "compositor-motion from=({:.1},{:.1}) to=({:.1},{:.1}) under_target={} under_current={} focus_before={} refocus_pending={}",
+                    self.pointer_location.x,
+                    self.pointer_location.y,
+                    possible_pos.x,
+                    possible_pos.y,
+                    under_at_target.is_some(),
+                    under.is_some(),
+                    focus_before.is_some(),
+                    self.pending_pointer_refocus
+                );
+            }
+        }
 
         // Pointer should only move if it's not locked or confined (and going out of bounds)
         if self.can_pointer_move(&under, possible_pos) {
