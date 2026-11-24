@@ -525,8 +525,10 @@ fn navigation_event_or_drop(
 /// exactly like input that never arrived. The bus is the channel a field observer can read.
 ///
 /// The message is a FORMAT TUPLE, not an interpolated literal: the element-message macros take
-/// `("fmt {}", arg)`, and a bare `("… {}", )`-less string would emit the braces literally and lose
-/// the error text that is the entire point of the report. `a_dropped_navigation_event_is_/// reported_on_the_bus` asserts the emitted text, so a regression there fails a test.
+/// `("fmt {}", arg)`, and a bare parenthesised string is the plain-message arm, which emits the
+/// braces literally and loses the error text that is the entire point of the report. The test
+/// `a_dropped_navigation_event_is_reported_on_the_bus` asserts the emitted text, so a regression
+/// there fails a test.
 fn report_dropped_navigation(element: &gst::Element, err: &gst::glib::error::BoolError) {
     gst::element_warning!(
         element,
