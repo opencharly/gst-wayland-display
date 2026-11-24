@@ -443,6 +443,22 @@ impl State {
         let serial = SERIAL_COUNTER.next_serial();
         let focus_before = pointer.current_focus();
 
+        // DIAGNOSTIC: the compositor half of the pointer chain. Written to a file because the
+        // streamer's service captures stdout only (opencharly/spec#432).
+        {
+            use std::io::Write as _;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true).append(true).open("/tmp/gwd-pointer-diag.log")
+            {
+                let _ = writeln!(
+                    f,
+                    "compositor-motion to=({:.1},{:.1}) under_target={} under_current={} focus_before={}",
+                    possible_pos.x, possible_pos.y,
+                    under_at_target.is_some(), under.is_some(), focus_before.is_some()
+                );
+            }
+        }
+
         // Pointer should only move if it's not locked or confined (and going out of bounds)
         if self.can_pointer_move(&under, possible_pos) {
             self.set_pointer_location(possible_pos);
