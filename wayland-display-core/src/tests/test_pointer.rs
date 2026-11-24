@@ -536,3 +536,57 @@ fn no_motion_follows_an_enter_that_activates_a_lock() {
         "no wl_pointer.motion may reach a locked pointer, got: {events:?}"
     );
 }
+
+/// A pointer that is OUTSIDE the window while it maps, then sent ONE absolute move onto it,
+/// must receive its `wl_pointer.enter`.
+///
+/// This is the shape a browser player sends: the viewer's pointer starts off the page (or
+/// the page maps under a pointer that is somewhere else), and the FIRST move onto it is one
+/// absolute motion. The motion resolved its focus target at the pointer's PRE-move location,
+/// so it handed smithay "no surface" while moving onto the window: no `wl_pointer.enter` was
+/// emitted, smithay's recorded focus stayed `None`, and every later motion was stale by one
+/// as well -- so a client that reads pointer state from the enter (wev, KWin's nested
+/// backend, the player) ignored pointer input for the whole session.
+/// (opencharly/charly-streamer#23, opencharly/gst-wayland-display#16.)
+#[test]
+fn a_pointer_that_moves_onto_a_surface_gets_its_enter() {
+    let mut f = Fixture::new();
+    f.round_trip();
+
+    // Park the pointer well outside the (0,0)-mapped toplevel BEFORE it maps, so the map
+    // handler's synthetic motion resolves no surface and no enter is delivered there.
+    // The output is 320x240 and the toplevel maps at its origin, so the window is made
+    // smaller than the output: (300,220) is inside the output (the compositor clamps there)
+    // and outside the window, which is what lets a single later motion be an ENTRY.
+    f.server
+        .pointer_motion_absolute(0, Point::from((300.0, 220.0)));
+    f.round_trip();
+
+    f.create_window(160, 160);
+    clean_events(f.client.get_client_events());
+
+    // ONE move onto the window.
+    f.server
+        .pointer_motion_absolute(0, Point::from((80.0, 80.0)));
+    f.round_trip();
+
+    let events = f.client.get_client_events();
+    assert!(
+        !events.is_empty(),
+        "a single move onto the window produced no pointer event at all"
+    );
+    let enter = events
+        .iter()
+        .find_map(|e| match e {
+            MouseEvents::Pointer(wl_pointer::Event::Enter {
+                surface_x,
+                surface_y,
+                ..
+            }) => Some((*surface_x, *surface_y)),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            panic!("the move onto the window must deliver wl_pointer.enter, got: {events:?}")
+        });
+    assert_eq!(enter, (80.0, 80.0), "the enter must carry the destination");
+}

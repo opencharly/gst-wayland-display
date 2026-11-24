@@ -388,9 +388,31 @@ impl State {
         // The mouse moves: the cursor is the pointer's again, not a pen's.
         self.restore_pointer_cursor_image();
         let pointer = self.seat.get_pointer().unwrap();
+        // The surface the pointer occupies RIGHT NOW. Used only by the constraint checks: an
+        // active confinement is judged against the surface the pointer currently holds and its
+        // live region, never against the destination.
         let under: Option<(FocusTarget, Point<f64, Logical>)> = self
             .space
             .element_under(self.pointer_location)
+            .map(|(w, pos)| (w.clone().into(), pos.to_f64()));
+
+        let possible_pos = self.clamp_coords(self.pointer_location + delta);
+
+        // The focus target the motion is DISPATCHED with, resolved at the DESTINATION.
+        //
+        // smithay's `PointerHandle::motion` compares this against `current_focus` to choose
+        // between a plain `wl_pointer.motion` and a leave+enter pair. Resolving it at the
+        // PRE-move location hands it a focus one motion stale, and the consequence is invisible
+        // from the outside: a pointer that moves ONTO a surface reports the OLD target, so the
+        // `None -> Some` transition never happens, no `wl_pointer.enter` is emitted, and a
+        // client that takes its pointer state from the enter sees NO pointer input at all --
+        // forever, because every later motion is stale by one as well. A browser client drives
+        // exactly this shape (park the pointer off-window, then send ONE absolute move onto the
+        // page), so such a session was silently pointer-dead
+        // (opencharly/charly-streamer#23, opencharly/gst-wayland-display#16).
+        let under_at_target: Option<(FocusTarget, Point<f64, Logical>)> = self
+            .space
+            .element_under(possible_pos)
             .map(|(w, pos)| (w.clone().into(), pos.to_f64()));
 
         // Edge-triggered pointer refocus.
@@ -412,14 +434,14 @@ impl State {
         // there is nothing to refocus onto yet -- and while the pointer is grabbed, since
         // smithay's default click grab is active for as long as a button is held and a
         // forced leave mid-click-drag would break the drag.
-        self.refocus_pointer_if_pending(&under, event_time_msec);
+        // The decision is the DESTINATION's: the refocus exists to make the motion below fire
+        // the enter arm for the surface it is moving onto.
+        self.refocus_pointer_if_pending(&under_at_target, event_time_msec);
 
         // Allocated AFTER the refocus block: the re-emitted wl_pointer.enter below must carry
         // a serial NEWER than the forced leave's, since clients echo enter serials back.
         let serial = SERIAL_COUNTER.next_serial();
         let focus_before = pointer.current_focus();
-
-        let possible_pos = self.clamp_coords(self.pointer_location + delta);
 
         // Pointer should only move if it's not locked or confined (and going out of bounds)
         if self.can_pointer_move(&under, possible_pos) {
@@ -429,7 +451,7 @@ impl State {
             // If we send the motion event after the relative_motion it'll behave oddly
             pointer.motion(
                 self,
-                under.clone(),
+                under_at_target.clone(),
                 &MotionEvent {
                     location: self.pointer_location,
                     serial,
@@ -463,7 +485,7 @@ impl State {
             if focus_after.is_some() && focus_after != focus_before && !locked {
                 pointer.motion(
                     self,
-                    under.clone(),
+                    under_at_target.clone(),
                     &MotionEvent {
                         location: self.pointer_location,
                         serial: SERIAL_COUNTER.next_serial(),
@@ -476,7 +498,7 @@ impl State {
         // Relative motion is always applied
         pointer.relative_motion(
             self,
-            under.map(|(w, pos)| (w, pos.to_f64())),
+            under_at_target.map(|(w, pos)| (w, pos.to_f64())),
             &RelativeMotionEvent {
                 delta,
                 delta_unaccel: delta_unaccelerated,
