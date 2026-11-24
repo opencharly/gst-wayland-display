@@ -432,9 +432,25 @@ impl EventHandler for WaylandDisplaySrc {
                     let element: gst::Element = self.obj().clone().upcast();
                     report_dropped_navigation(&element, err);
                 }
+                {
+                    use std::io::Write as _;
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true).append(true).open("/tmp/gwd-pointer-diag.log")
+                    {
+                        let _ = writeln!(f, "element-navigation parsed_ok={}", parsed.is_ok());
+                    }
+                }
                 let Some(navigation_event) = navigation_event_or_drop(parsed) else {
                     return false;
                 };
+                {
+                    use std::io::Write as _;
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true).append(true).open("/tmp/gwd-pointer-diag.log")
+                    {
+                        let _ = writeln!(f, "element-NavigationEvent {:?}", navigation_event);
+                    }
+                }
 
                 match navigation_event {
                     NavigationEvent::MouseMove { x, y, .. } => {
