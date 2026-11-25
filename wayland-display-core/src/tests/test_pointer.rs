@@ -185,27 +185,31 @@ fn lock_mouse() {
     f.round_trip();
 
     {
-        // Mouse shouldn't be moved!
-        assert_eq!(f.server.pointer_location, expected_location);
+        // An ABSOLUTE move is authoritative: a lock governs RELATIVE motion, it does not
+        // tell the pointer to ignore where the stream says it is (operator decision,
+        // opencharly/gst-wayland-display#20 -- a remote viewer's pointer must move even
+        // when the client holds a lock, or the streamed session is unusable).
+        assert_eq!(f.server.pointer_location, absolute_position);
 
-        // But we should still get Relative mouse events
+        // The absolute position reaches the client as a Motion at that position.
         let client_events = f.client.get_client_events();
-        assert!(client_events.len() >= 2);
-        let MouseEvents::Relative(client_event) = client_events.remove(0) else {
-            panic!("Unexpected event: {:?}", client_events);
-        };
-        let zwp_relative_pointer_v1::Event::RelativeMotion { dx, dy, .. } = client_event else {
-            panic!("Unexpected event: {:?}", client_event);
-        };
-        assert_eq!(dx, absolute_position.x - f.server.pointer_location.x);
-        assert_eq!(dy, absolute_position.y - f.server.pointer_location.y);
-
-        // And no Pointer Motion events
+        let mut saw_motion = false;
         while let Some(event) = client_events.pop() {
-            if let MouseEvents::Pointer(wl_pointer::Event::Motion { .. }) = event {
-                panic!("Unexpected event: {:?}", event)
+            if let MouseEvents::Pointer(wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            }) = event
+            {
+                assert_eq!(surface_x, absolute_position.x);
+                assert_eq!(surface_y, absolute_position.y);
+                saw_motion = true;
             }
         }
+        assert!(
+            saw_motion,
+            "an absolute move under a lock must still reach the client"
+        );
     }
 }
 
