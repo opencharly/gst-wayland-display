@@ -43,13 +43,8 @@ on:
     types: [completed]
   push:
     branches:
-      # THIS repo's default branch is `stable` (it is a fork of
-      # games-on-whales/gst-wayland-display). The canonical caller names `main`, which this
-      # repo does not have, so a merged PR here would fire NEITHER the push trigger nor the
-      # workflow_run one (the validator's run completes BEFORE the merge). Measured: PR #17
-      # merged at 2026-11-24T08:45:53Z to `stable` and no tag-on-merge run was created.
-      # `stable` is added beside `main`; nothing else in the caller changes.
       - main
+      - master
       - stable
   schedule:
     - cron: "*/30 * * * *"
