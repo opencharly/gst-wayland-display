@@ -36,6 +36,18 @@ use smithay::{
 use std::collections::{HashMap, HashSet};
 use std::{os::unix::io::OwnedFd, path::Path, time::Instant};
 
+/// DIAGNOSTIC sink: which constraint arm refuses a motion (opencharly/gst-wayland-display#20).
+fn diag_arm(what: &str) {
+    use std::io::Write as _;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/gwd-pointer-diag.log")
+    {
+        let _ = writeln!(f, "constraint-refused {what}");
+    }
+}
+
 // From linux/input-event-codes.h
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
@@ -311,6 +323,7 @@ impl State {
                         // motion, it does not tell the pointer to ignore where the stream
                         // says it is (see pointer_motion_absolute_at).
                         PointerConstraint::Locked(_locked) if !absolute => {
+                            diag_arm("locked");
                             should_motion = false;
                         }
                         // Absolute: the stream decides where the pointer is; a lock does not
@@ -325,12 +338,14 @@ impl State {
                                     },
                                 ) != surface.wl_surface()
                                 {
+                                    diag_arm("confined-surface");
                                     should_motion = false;
                                 }
                                 if let Some(region) = confine.region()
                                     && !region
                                         .contains((target_position - *surface_loc).to_i32_round())
                                 {
+                                    diag_arm("confined-region");
                                     should_motion = false;
                                 }
                             }
