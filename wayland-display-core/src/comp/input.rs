@@ -262,8 +262,9 @@ impl State {
         &self,
         under: &Option<(FocusTarget, Point<f64, Logical>)>,
         target_position: Point<f64, Logical>,
+        absolute: bool,
     ) -> bool {
-        let should_motion = self.constraint_allows_move(under, target_position);
+        let should_motion = self.constraint_allows_move(under, target_position, absolute);
         let new_under = self
             .space
             .element_under(target_position)
@@ -280,6 +281,7 @@ impl State {
         &self,
         under: &Option<(FocusTarget, Point<f64, Logical>)>,
         target_position: Point<f64, Logical>,
+        absolute: bool,
     ) -> bool {
         let pointer = self.seat.get_pointer().unwrap();
         let mut should_motion = true;
@@ -305,9 +307,15 @@ impl State {
                         return;
                     }
                     match &*constraint {
-                        PointerConstraint::Locked(_locked) => {
+                        // An ABSOLUTE move is authoritative: a lock governs relative
+                        // motion, it does not tell the pointer to ignore where the stream
+                        // says it is (see pointer_motion_absolute_at).
+                        PointerConstraint::Locked(_locked) if !absolute => {
                             should_motion = false;
                         }
+                        // Absolute: the stream decides where the pointer is; a lock does not
+                        // freeze it (see `pointer_motion_absolute_at`).
+                        PointerConstraint::Locked(_locked) => {}
                         PointerConstraint::Confined(confine) => {
                             // If confined, don't move pointer if it would go outside surface or region
                             if let Some((surface, surface_loc)) = &under {
@@ -384,6 +392,48 @@ impl State {
         delta: Point<f64, Logical>,
         delta_unaccelerated: Point<f64, Logical>,
     ) {
+        self.pointer_motion_inner(
+            event_time_msec,
+            event_time_usec,
+            delta,
+            delta_unaccelerated,
+            false,
+        )
+    }
+
+    /// As [`Self::pointer_motion`], but an ABSOLUTE move bypasses an active pointer LOCK.
+    ///
+    /// A lock exists so a client can treat relative motion as a virtual cursor; it says nothing
+    /// about where the pointer must stay when an absolute position arrives from the outside. This
+    /// compositor's absolute positions come from the stream (a remote viewer's pointer), and a
+    /// nested compositor (KWin) activates a lock on its own surface — so refusing absolute motion
+    /// under a lock leaves the remote pointer frozen at wherever it happened to be, with the
+    /// element, the seat and the client all working perfectly. Measured:
+    /// opencharly/gst-wayland-display#20.
+    pub fn pointer_motion_absolute_at(
+        &mut self,
+        event_time_msec: u32,
+        event_time_usec: u64,
+        delta: Point<f64, Logical>,
+        delta_unaccelerated: Point<f64, Logical>,
+    ) {
+        self.pointer_motion_inner(
+            event_time_msec,
+            event_time_usec,
+            delta,
+            delta_unaccelerated,
+            true,
+        )
+    }
+
+    fn pointer_motion_inner(
+        &mut self,
+        event_time_msec: u32,
+        event_time_usec: u64,
+        delta: Point<f64, Logical>,
+        delta_unaccelerated: Point<f64, Logical>,
+        absolute: bool,
+    ) {
         self.last_pointer_movement = Instant::now();
         // The mouse moves: the cursor is the pointer's again, not a pen's.
         self.restore_pointer_cursor_image();
@@ -444,7 +494,7 @@ impl State {
         let focus_before = pointer.current_focus();
 
         // Pointer should only move if it's not locked or confined (and going out of bounds)
-        if self.can_pointer_move(&under, possible_pos) {
+        if self.can_pointer_move(&under, possible_pos, absolute) {
             self.set_pointer_location(possible_pos);
 
             // Not sure why, but order here matters (at least when using Sway nested)!!!
@@ -550,7 +600,7 @@ impl State {
         )
             .into();
 
-        self.pointer_motion(
+        self.pointer_motion_absolute_at(
             event_time_msec,
             event_time_msec as u64 * 1000,
             relative_movement,
@@ -1049,7 +1099,7 @@ impl State {
             .space
             .element_under(self.pointer_location)
             .map(|(w, pos)| (w.clone().into(), pos.to_f64()));
-        if !self.constraint_allows_move(&current, location) {
+        if !self.constraint_allows_move(&current, location, false) {
             return;
         }
         self.last_pointer_movement = Instant::now();
@@ -1212,7 +1262,7 @@ impl State {
             .map(|(w, pos)| (w.clone().into(), pos.to_f64()));
         // A locked (or confining) pointer constraint holds the pointer as it does for the
         // mouse: the pen's emulated input then goes to the constrained surface.
-        if !self.can_pointer_move(&current, location) {
+        if !self.can_pointer_move(&current, location, false) {
             return;
         }
         let under: Option<(FocusTarget, Point<f64, Logical>)> = self
