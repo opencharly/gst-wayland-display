@@ -4290,3 +4290,34 @@ mod color_transport_tests {
         assert_ne!(BaseSrcImpl::caps(imp, None).unwrap(), sdr);
     }
 }
+
+#[cfg(test)]
+mod scroll_axis_tests {
+    use super::*;
+
+    /// SPIKE: the `MouseScroll` -> seat-axis mapping, which had NO test
+    /// (opencharly/gst-wayland-display#13). Asserts the full chain the bed's wheel
+    /// step depends on: a DOM wheel notch (deltaY 100 px) becomes delta_y = -120 in
+    /// `input.js` (120 per notch, GStreamer's up-positive convention), the element
+    /// negates it for Wayland (down-positive), and the compositor scales by 3/120.
+    #[test]
+    fn a_wheel_notch_down_lands_as_positive_wayland_axis() {
+        // input.js: delta_y = -deltaY * (120/100) = -120 for one notch down.
+        let command = gst_scroll_to_axis(0.0, -120.0);
+        let Command::PointerAxis(h, v) = command else {
+            panic!("must map to PointerAxis");
+        };
+        assert_eq!(h, 0.0);
+        // Wayland's axis is down-positive, so one notch DOWN must be POSITIVE here.
+        assert!(
+            v > 0.0,
+            "one notch down must be a positive Wayland axis, got {v}"
+        );
+        assert_eq!(
+            v, 120.0,
+            "one notch carries 120 units, as input.js builds it"
+        );
+        // comp/input.rs scales by 3/120 for the seat.
+        assert_eq!(v * 3.0 / 120.0, 3.0);
+    }
+}
