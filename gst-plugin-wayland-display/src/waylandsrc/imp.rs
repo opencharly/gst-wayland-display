@@ -438,6 +438,21 @@ impl EventHandler for WaylandDisplaySrc {
 
                 match navigation_event {
                     NavigationEvent::MouseMove { x, y, .. } => {
+                        // SPIKE (never merged): does a nested KWin move its cursor from RELATIVE
+                        // motion only? Send the delta between successive stream positions IN
+                        // ADDITION to the absolute one, which merely establishes focus.
+                        {
+                            static LAST: std::sync::Mutex<Option<(f64, f64)>> =
+                                std::sync::Mutex::new(None);
+                            let mut last = LAST.lock().unwrap();
+                            if let Some((lx, ly)) = *last {
+                                let d = (x - lx, y - ly);
+                                if d.0 != 0.0 || d.1 != 0.0 {
+                                    self.send_command(Command::PointerMotion(d.into()));
+                                }
+                            }
+                            *last = Some((x, y));
+                        }
                         self.send_command(Command::PointerMotionAbsolute((x, y).into()));
 
                         return true;
