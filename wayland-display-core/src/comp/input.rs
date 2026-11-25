@@ -488,6 +488,18 @@ impl State {
             // --force-grab-cursor) activates. Checked AFTER the enter, since that is when
             // the lock became active.
             let focus_after = pointer.current_focus();
+            {
+                use std::io::Write as _;
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true).append(true).open("/tmp/gwd-pointer-diag.log")
+                {
+                    let _ = writeln!(
+                        f,
+                        "compositor-focus-after to=({:.1},{:.1}) focus_after={}",
+                        possible_pos.x, possible_pos.y, focus_after.is_some()
+                    );
+                }
+            }
             let locked = focus_after
                 .as_ref()
                 .and_then(|focus| focus.wl_surface())

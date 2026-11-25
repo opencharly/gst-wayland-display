@@ -97,6 +97,9 @@ struct State {
     pub keyboard_events: Vec<wl_keyboard::Event>,
     pub output: Option<wl_output::WlOutput>,
     pub output_events: Vec<wl_output::Event>,
+    /// Every wl_surface event, so a test can assert the compositor told the client which
+    /// OUTPUT its surface is on (wl_surface.enter).
+    pub surface_events: Vec<wl_surface::Event>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -213,7 +216,18 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
 }
 
 delegate_noop!(State: ignore wl_compositor::WlCompositor);
-delegate_noop!(State: ignore wl_surface::WlSurface);
+impl Dispatch<wl_surface::WlSurface, ()> for State {
+    fn event(
+        state: &mut Self,
+        _proxy: &wl_surface::WlSurface,
+        event: wl_surface::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        state.surface_events.push(event);
+    }
+}
 delegate_noop!(State: ignore wl_shm::WlShm);
 delegate_noop!(State: ignore wl_shm_pool::WlShmPool);
 delegate_noop!(State: ignore wl_buffer::WlBuffer);
@@ -304,6 +318,7 @@ impl WaylandClient {
             keyboard_events: Vec::new(),
             output: None,
             output_events: Vec::new(),
+            surface_events: Vec::new(),
         };
 
         WaylandClient {
@@ -468,6 +483,11 @@ impl WaylandClient {
     }
 
     /// All wl_keyboard events received so far; callers `drain` or inspect.
+    /// Every wl_surface event received so far; callers `drain` or inspect.
+    pub fn get_surface_events(&mut self) -> &mut Vec<wl_surface::Event> {
+        self.state.surface_events.as_mut()
+    }
+
     pub fn get_keyboard_events(&mut self) -> &mut Vec<wl_keyboard::Event> {
         self.state.keyboard_events.as_mut()
     }

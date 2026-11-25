@@ -3,7 +3,7 @@ use crate::tests::client::MouseEvents;
 use crate::tests::fixture::Fixture;
 use smithay::utils::Point;
 use test_log::test;
-use wayland_client::protocol::wl_pointer;
+use wayland_client::protocol::{wl_pointer, wl_surface};
 use wayland_protocols::wp::relative_pointer::zv1::client::zwp_relative_pointer_v1;
 
 fn clean_events(events: &mut Vec<MouseEvents>) {
@@ -589,4 +589,23 @@ fn a_pointer_that_moves_onto_a_surface_gets_its_enter() {
             panic!("the move onto the window must deliver wl_pointer.enter, got: {events:?}")
         });
     assert_eq!(enter, (80.0, 80.0), "the enter must carry the destination");
+}
+
+/// R7 for `wl_surface.enter`: the compositor must tell a mapped toplevel which OUTPUT its surface
+/// is on. Nothing in the tree sent it before (the fix added the only call site), so this fails
+/// with that call removed -- which is what makes it coverage rather than decoration.
+#[test]
+fn mapping_a_toplevel_tells_the_client_which_output_it_is_on() {
+    let mut f = Fixture::new();
+    f.round_trip();
+    f.create_window(320, 240);
+    f.round_trip();
+
+    let events = f.client.get_surface_events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, wl_surface::Event::Enter { .. })),
+        "the compositor must send wl_surface.enter for the mapped toplevel, got: {events:?}"
+    );
 }
